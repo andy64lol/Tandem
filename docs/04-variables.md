@@ -2,7 +2,7 @@
 
 ## Declarations
 
-Declarations use `[local] [const] type name = value;`; square brackets here mark optional modifiers. For example:
+Declarations use `(local) (const) type name = value;`, where the parentheses mark optional modifiers. For example:
 
 ```tlua
 int score = 0;
@@ -18,7 +18,7 @@ Every declaration needs an initializer, and the initializer must have the declar
 
 ## The local and const modifiers
 
-The `local` and `const` modifiers are optional, may appear in either order, and may each be parenthesized. Thus `local const int limit = 10;`, `(local) (const) int limit = 10;`, and `const (local) int limit = 10;` are accepted forms. Writing the same modifier twice is an error.
+The `local` and `const` modifiers are optional, shown here as `(local)` and `(const)`. They may appear in either order, and may be written with or without the parentheses. Thus `local const int limit = 10;`, `(local) (const) int limit = 10;`, and `const (local) int limit = 10;` are all accepted forms. Writing the same modifier twice is an error.
 
 ### local
 
