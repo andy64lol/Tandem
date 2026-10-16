@@ -1,0 +1,22 @@
+int playerX = 100;
+
+fn movePlayer(int speed = 10) -> void {
+    playerX += speed;
+}
+
+movePlayer(20);
+
+if (playerX > 100) {
+    print("Player moved!");
+}
+
+fn hello() -> void {
+    print("Hello!");
+}
+
+hello();
+
+for (i, 100, 10, -10) {
+    printf("Hello world! {i}");
+    // variable, start, stop, step
+}
