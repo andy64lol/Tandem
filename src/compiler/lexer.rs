@@ -170,7 +170,7 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
             continue;
         }
         let c = b[i] as char;
-        if "{}(),;+-*/%=<>!".contains(c) {
+        if "{}(),;+-*/%=<>!.".contains(c) {
             out.push(Token {
                 kind: Tok::Sym(c.to_string()),
                 pos: i,

@@ -234,6 +234,13 @@ impl Parser {
         }
         let e = self.expr(0)?;
         self.expect_sym(";")?;
+        if let Expr::Call(name, args) = &e {
+            if name == "require" {
+                if let [Expr::Str(path)] = args.as_slice() {
+                    return Ok(Stmt::Require(path.clone()));
+                }
+            }
+        }
         Ok(Stmt::Expr(e))
     }
     fn declaration_after_type(
@@ -275,7 +282,7 @@ impl Parser {
         } else if self.eat_sym("-") {
             Expr::Unary("-".into(), Box::new(self.expr(7)?))
         } else {
-            self.atom()?
+            self.postfix()?
         };
         loop {
             let op = match &self.cur().kind {
@@ -291,6 +298,43 @@ impl Parser {
             lhs = Expr::Bin(Box::new(lhs), op, Box::new(rhs));
         }
         Ok(lhs)
+    }
+    fn call_args(&mut self) -> Result<Vec<Expr>, String> {
+        self.expect_sym("(")?;
+        let mut a = vec![];
+        if !self.sym(")") {
+            loop {
+                a.push(self.expr(1)?);
+                if !self.eat_sym(",") {
+                    break;
+                }
+            }
+        }
+        self.expect_sym(")")?;
+        Ok(a)
+    }
+    fn postfix(&mut self) -> Result<Expr, String> {
+        let mut e = self.atom()?;
+        loop {
+            if self.eat_sym(".") {
+                let name = self.expect_ident()?;
+                if self.sym("(") {
+                    let args = self.call_args()?;
+                    e = Expr::MethodCall(Box::new(e), name, args);
+                } else {
+                    e = Expr::Member(Box::new(e), name);
+                }
+            } else if self.sym("(") {
+                let args = self.call_args()?;
+                match e {
+                    Expr::Var(name) => e = Expr::Call(name, args),
+                    _ => return Err(self.err("only named functions can be called".into())),
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(e)
     }
     fn atom(&mut self) -> Result<Expr, String> {
         let tok = self.bump();
@@ -309,23 +353,7 @@ impl Parser {
             Tok::Str(s) => Ok(Expr::Str(s)),
             Tok::Ident(s) if s == "true" => Ok(Expr::Bool(true)),
             Tok::Ident(s) if s == "false" => Ok(Expr::Bool(false)),
-            Tok::Ident(s) => {
-                if self.eat_sym("(") {
-                    let mut a = vec![];
-                    if !self.sym(")") {
-                        loop {
-                            a.push(self.expr(1)?);
-                            if !self.eat_sym(",") {
-                                break;
-                            }
-                        }
-                    }
-                    self.expect_sym(")")?;
-                    Ok(Expr::Call(s, a))
-                } else {
-                    Ok(Expr::Var(s))
-                }
-            }
+            Tok::Ident(s) => Ok(Expr::Var(s)),
             Tok::Sym(s) if s == "(" => {
                 let e = self.expr(0)?;
                 self.expect_sym(")")?;

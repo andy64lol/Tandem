@@ -1,13 +1,10 @@
 use std::collections::HashMap;
 
-use crate::compiler::ast::{parse_printf_format, Expr, FormatPart, Stmt, Top, Ty};
+use crate::compiler::ast::{
+    module_basename, parse_printf_format, Export, Expr, FnSig, FormatPart, ModuleExports, Stmt, Top,
+    Ty,
+};
 
-#[derive(Clone)]
-struct FnSig {
-    args: Vec<Ty>,
-    required: usize,
-    ret: Ty,
-}
 #[derive(Clone)]
 struct Binding {
     ty: Ty,
@@ -16,12 +13,66 @@ struct Binding {
 struct Checker {
     scopes: Vec<HashMap<String, Binding>>,
     funcs: HashMap<String, FnSig>,
+    modules: HashMap<String, ModuleExports>,
 }
 impl Checker {
-    fn new() -> Self {
+    fn new(modules: HashMap<String, ModuleExports>) -> Self {
         Self {
             scopes: vec![HashMap::new()],
             funcs: HashMap::new(),
+            modules,
+        }
+    }
+    fn module_exports(&self, base: &Expr) -> Result<(&ModuleExports, String), String> {
+        let Expr::Var(namespace) = base else {
+            return Err("module access requires a module variable".into());
+        };
+        let binding = self
+            .lookup(namespace)
+            .ok_or_else(|| format!("unknown variable '{namespace}'"))?;
+        let Ty::Module(id) = binding.ty else {
+            return Err(format!("'{namespace}' is not a module"));
+        };
+        let exports = self
+            .modules
+            .get(&id)
+            .ok_or_else(|| format!("unknown module '{id}'"))?;
+        Ok((exports, namespace.clone()))
+    }
+    fn member_type(&self, base: &Expr, name: &str) -> Result<Ty, String> {
+        let (exports, namespace) = self.module_exports(base)?;
+        match exports.items.get(name) {
+            Some(Export::Var(ty)) => Ok(ty.clone()),
+            Some(Export::Fn(_)) => {
+                Err(format!("function '{namespace}.{name}' must be called"))
+            }
+            None => Err(format!("module has no member '{name}'")),
+        }
+    }
+    fn method_return(&self, base: &Expr, name: &str, args: &[Expr]) -> Result<Ty, String> {
+        let (exports, namespace) = self.module_exports(base)?;
+        match exports.items.get(name) {
+            Some(Export::Var(_)) => Err(format!("'{namespace}.{name}' is not a function")),
+            Some(Export::Fn(signature)) => {
+                if args.len() < signature.required || args.len() > signature.args.len() {
+                    return Err(format!(
+                        "'{namespace}.{name}' expects {}..{} arguments, got {}",
+                        signature.required,
+                        signature.args.len(),
+                        args.len()
+                    ));
+                }
+                for (arg, ty) in args.iter().zip(&signature.args) {
+                    let got = self.expr(arg)?;
+                    if &got != ty {
+                        return Err(format!(
+                            "argument to '{namespace}.{name}' expects {ty:?}, got {got:?}"
+                        ));
+                    }
+                }
+                Ok(signature.ret.clone())
+            }
+            None => Err(format!("module has no member '{name}'")),
         }
     }
     fn push(&mut self) {
@@ -79,7 +130,18 @@ impl Checker {
                     _ => Err(format!("operator {op} cannot combine {x:?} and {y:?}")),
                 }
             }
+            Expr::Member(base, name) => self.member_type(base, name),
+            Expr::MethodCall(base, name, args) => self.method_return(base, name, args),
             Expr::Call(n, args) => {
+                if n == "require" {
+                    let [Expr::Str(path)] = args.as_slice() else {
+                        return Err("require expects one string literal argument".into());
+                    };
+                    if !self.modules.contains_key(path) {
+                        return Err(format!("unknown module '{path}'"));
+                    }
+                    return Ok(Ty::Module(path.clone()));
+                }
                 if n == "print" {
                     for a in args {
                         self.expr(a)?;
@@ -134,14 +196,19 @@ impl Checker {
                 self.declare(&decl.name, decl.ty.clone(), !decl.is_const)
             }
             Stmt::Assign(n, op, e) => {
-                let binding = self
-                    .lookup(n)
-                    .ok_or_else(|| format!("assignment to unknown variable '{n}'"))?;
+                let r = self.expr(e)?;
+                let Some(binding) = self.lookup(n) else {
+                    if op == "=" {
+                        if let Ty::Module(_) = r {
+                            return self.declare(n, r, false);
+                        }
+                    }
+                    return Err(format!("assignment to unknown variable '{n}'"));
+                };
                 if !binding.mutable {
                     return Err(format!("cannot assign to constant '{n}'"));
                 }
                 let t = binding.ty;
-                let r = self.expr(e)?;
                 let expected = if op == "=" {
                     t.clone()
                 } else {
@@ -158,6 +225,12 @@ impl Checker {
                     ));
                 }
                 Ok(())
+            }
+            Stmt::Require(path) => {
+                if !self.modules.contains_key(path) {
+                    return Err(format!("unknown module '{path}'"));
+                }
+                self.declare(&module_basename(path), Ty::Module(path.clone()), false)
             }
             Stmt::Expr(e) => {
                 self.expr(e)?;
@@ -229,8 +302,8 @@ impl Checker {
     }
 }
 
-pub(crate) fn check(program: &[Top]) -> Result<(), String> {
-    let mut c = Checker::new();
+pub(crate) fn check(program: &[Top], modules: &HashMap<String, ModuleExports>) -> Result<(), String> {
+    let mut c = Checker::new(modules.clone());
     c.funcs.insert(
         "print".into(),
         FnSig {

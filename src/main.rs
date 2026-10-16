@@ -4,7 +4,14 @@ use std::{
     process,
 };
 
-use typelua::{compiler, runtime};
+use typelua::compiler::{self, Diagnostic};
+use typelua::runtime;
+
+fn report(diagnostics: &[Diagnostic]) {
+    for diagnostic in diagnostics {
+        eprintln!("TypeLua {}: {}", diagnostic.severity.label(), diagnostic.message);
+    }
+}
 
 fn usage() -> ! {
     eprintln!(
@@ -27,8 +34,10 @@ fn main() {
             eprintln!("cannot read {}: {error}", args[2]);
             process::exit(1)
         });
-        compiler::compile(&source).unwrap_or_else(|error| {
-            eprintln!("TypeLua error: {error}");
+        let input_path_check = Path::new(&args[2]);
+        let parent = input_path_check.parent().unwrap_or(Path::new("."));
+        compiler::compile_with_dir(&source, parent).unwrap_or_else(|diagnostics| {
+            report(&diagnostics);
             process::exit(1)
         });
         println!("{}: OK", args[2]);
@@ -54,8 +63,9 @@ fn main() {
         eprintln!("cannot read {}: {error}", input_path.display());
         process::exit(1)
     });
-    let lua_source = compiler::compile(&source).unwrap_or_else(|error| {
-        eprintln!("TypeLua error: {error}");
+    let parent = input_path.parent().unwrap_or(Path::new("."));
+    let lua_source = compiler::compile_with_dir(&source, parent).unwrap_or_else(|diagnostics| {
+        report(&diagnostics);
         process::exit(1)
     });
 

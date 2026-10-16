@@ -20,11 +20,12 @@ This book is the complete reference for TypeLua 0.1. Chapters are ordered so a f
 
 ## Part III — Tooling
 
-9. [Command line](09-cli.md): every CLI mode, output paths, arguments, and exit codes.
-10. [Rust API](10-rust-api.md): embed the compiler and the Lua runtime in a Rust program.
+9. [Diagnostics](09-diagnostics.md): errors, warnings, and why a single warning blocks compilation.
+10. [Command line](10-cli.md): every CLI mode, output paths, arguments, and exit codes.
+11. [Rust API](11-rust-api.md): embed the compiler and the Lua runtime in a Rust program.
 
 ## Part IV — Status
 
-11. [Limitations](11-limitations.md): what TypeLua does not do yet.
+12. [Limitations](12-limitations.md): what TypeLua does not do yet.
 
 The [project TODO list](../todo.md) tracks planned language, tooling, and runtime work.

@@ -35,7 +35,7 @@ Or invoke the compiled binary directly:
 
 The compiled Lua is run after it is written. The Rust library also exposes `typelua::runtime::run_file("script.lua")` and `typelua::runtime::run_source(source, "chunk-name")` for embedding Lua execution in another Rust program.
 
-See [The TypeLua Book](docs/README.md) for the full documentation, starting with the [introduction](docs/01-introduction.md) and [getting started](docs/02-getting-started.md). The reference chapters cover [types](docs/03-types.md), [variables](docs/04-variables.md), [functions](docs/05-functions.md), [statements](docs/06-statements.md), [expressions](docs/07-expressions.md), [comments](docs/08-comments.md), the [command line](docs/09-cli.md), the [Rust API](docs/10-rust-api.md), and [limitations](docs/11-limitations.md). The [TODO list](todo.md) tracks planned work.
+See [The TypeLua Book](docs/README.md) for the full documentation, starting with the [introduction](docs/01-introduction.md) and [getting started](docs/02-getting-started.md). The reference chapters cover [types](docs/03-types.md), [variables](docs/04-variables.md), [functions](docs/05-functions.md), [statements](docs/06-statements.md), [expressions](docs/07-expressions.md), [comments](docs/08-comments.md), [diagnostics](docs/09-diagnostics.md), the [command line](docs/10-cli.md), the [Rust API](docs/11-rust-api.md), and [limitations](docs/12-limitations.md). The [TODO list](todo.md) tracks planned work.
 
 ## Language at a glance
 

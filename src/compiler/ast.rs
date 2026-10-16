@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Ty {
     Int,
@@ -5,6 +7,7 @@ pub(crate) enum Ty {
     Bool,
     Str,
     Void,
+    Module(String),
 }
 impl Ty {
     pub(crate) fn parse(s: &str) -> Option<Self> {
@@ -29,6 +32,31 @@ pub(crate) enum Expr {
     Unary(String, Box<Expr>),
     Bin(Box<Expr>, String, Box<Expr>),
     Call(String, Vec<Expr>),
+    Member(Box<Expr>, String),
+    MethodCall(Box<Expr>, String, Vec<Expr>),
+}
+
+#[derive(Clone)]
+pub(crate) struct FnSig {
+    pub(crate) args: Vec<Ty>,
+    pub(crate) required: usize,
+    pub(crate) ret: Ty,
+}
+
+#[derive(Clone)]
+pub(crate) enum Export {
+    Fn(FnSig),
+    Var(Ty),
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct ModuleExports {
+    pub(crate) items: HashMap<String, Export>,
+}
+
+pub(crate) fn module_basename(path: &str) -> String {
+    let last = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    last.strip_suffix(".tlua").unwrap_or(last).to_string()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -92,6 +120,7 @@ pub(crate) fn parse_printf_format(format: &str) -> Result<Vec<FormatPart>, Strin
 pub(crate) enum Stmt {
     Decl(VarDecl),
     Assign(String, String, Expr),
+    Require(String),
     Expr(Expr),
     Block(Vec<Stmt>),
     If(Expr, Vec<Stmt>, Vec<Stmt>),

@@ -1,4 +1,4 @@
-# 9. Command line
+# 10. Command line
 
 ## Synopsis
 
@@ -60,11 +60,11 @@ cargo run -- examples/script.lua first-arg second-arg
 
 The `.lua` file is run as written; it is not parsed as TypeLua or transpiled.
 
-## Errors
+## Diagnostics
 
 Source and Lua runtime errors are printed to standard error, and the command exits with a nonzero status:
 
-- A TypeLua compile error is printed as `TypeLua error: ...`. It prevents output generation and exits with status 1.
+- A TypeLua diagnostic (error or warning) is printed as `TypeLua error: ...` or `TypeLua warning: ...`. Because warnings are fatal, either form prevents output generation and exits with status 1. See [Diagnostics](09-diagnostics.md).
 - A Lua runtime error happens after the output file has been written, so the generated file remains available for inspection. The command exits with status 1.
 - An invalid command line prints the usage message and exits with status 2.
 

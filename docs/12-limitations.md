@@ -1,4 +1,4 @@
-# 11. Limitations
+# 12. Limitations
 
 TypeLua 0.1 is a small proof of concept. The language does not currently implement:
 

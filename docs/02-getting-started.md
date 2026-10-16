@@ -52,4 +52,4 @@ Pass a `.lua` file to execute it directly in the embedded runtime. Extra argumen
 cargo run -- examples/script.lua first-arg second-arg
 ```
 
-See [Command line](09-cli.md) for the full CLI reference, including error handling and exit codes.
+See [Command line](10-cli.md) for the full CLI reference, including error handling and exit codes.

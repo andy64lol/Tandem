@@ -1,8 +1,9 @@
-# 10. Rust API
+# 11. Rust API
 
 TypeLua uses [`mlua`](https://docs.rs/mlua/) with Lua 5.4 and its vendored Lua build. The Rust library exposes the compiler and runtime as separate modules:
 
-- `typelua::compiler::compile(&str) -> Result<String, String>` parses and type-checks TypeLua source, then returns generated Lua.
+- `typelua::compiler::compile(&str) -> Result<String, Vec<Diagnostic>>` parses and type-checks TypeLua source, then returns generated Lua. On any diagnostic it returns the diagnostics instead; because warnings are fatal, a single warning also fails compilation.
+- `typelua::compiler::Diagnostic` carries a `severity` (`Severity::Error` or `Severity::Warning`) and a `message`.
 - `typelua::runtime::run_file(path)` runs an existing Lua file.
 - `typelua::runtime::run_source(source, chunk_name)` runs Lua source held in memory.
 
@@ -38,7 +39,13 @@ fn main() -> Result<(), String> {
         greet("Lua");
     "#;
 
-    let lua_source = typelua::compiler::compile(source)?;
+    let lua_source = typelua::compiler::compile(source).map_err(|diagnostics| {
+        diagnostics
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.severity.label(), diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
     typelua::runtime::run_source(&lua_source, "generated.lua")
 }
 ```
