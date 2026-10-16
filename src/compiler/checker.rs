@@ -8,8 +8,13 @@ struct FnSig {
     required: usize,
     ret: Ty,
 }
+#[derive(Clone)]
+struct Binding {
+    ty: Ty,
+    mutable: bool,
+}
 struct Checker {
-    scopes: Vec<HashMap<String, Ty>>,
+    scopes: Vec<HashMap<String, Binding>>,
     funcs: HashMap<String, FnSig>,
 }
 impl Checker {
@@ -25,15 +30,15 @@ impl Checker {
     fn pop(&mut self) {
         self.scopes.pop();
     }
-    fn lookup(&self, n: &str) -> Option<Ty> {
+    fn lookup(&self, n: &str) -> Option<Binding> {
         self.scopes.iter().rev().find_map(|s| s.get(n).cloned())
     }
-    fn declare(&mut self, n: &str, t: Ty) -> Result<(), String> {
+    fn declare(&mut self, n: &str, t: Ty, mutable: bool) -> Result<(), String> {
         let s = self.scopes.last_mut().unwrap();
         if s.contains_key(n) {
             return Err(format!("duplicate variable '{n}' in this scope"));
         }
-        s.insert(n.into(), t);
+        s.insert(n.into(), Binding { ty: t, mutable });
         Ok(())
     }
     fn expr(&self, e: &Expr) -> Result<Ty, String> {
@@ -44,6 +49,7 @@ impl Checker {
             Expr::Bool(_) => Ok(Ty::Bool),
             Expr::Var(n) => self
                 .lookup(n)
+                .map(|binding| binding.ty)
                 .ok_or_else(|| format!("unknown variable '{n}'")),
             Expr::Unary(op, x) => {
                 let t = self.expr(x)?;
@@ -124,12 +130,25 @@ impl Checker {
                         "variable '{n}' declared {t:?}, initializer is {got:?}"
                     ));
                 }
-                self.declare(n, t.clone())
+                self.declare(n, t.clone(), true)
+            }
+            Stmt::ConstDecl(t, n, e) => {
+                let got = self.expr(e)?;
+                if &got != t {
+                    return Err(format!(
+                        "constant '{n}' declared {t:?}, initializer is {got:?}"
+                    ));
+                }
+                self.declare(n, t.clone(), false)
             }
             Stmt::Assign(n, op, e) => {
-                let t = self
+                let binding = self
                     .lookup(n)
                     .ok_or_else(|| format!("assignment to unknown variable '{n}'"))?;
+                if !binding.mutable {
+                    return Err(format!("cannot assign to constant '{n}'"));
+                }
+                let t = binding.ty;
                 let r = self.expr(e)?;
                 let expected = if op == "=" {
                     t.clone()
@@ -192,7 +211,7 @@ impl Checker {
                     }
                 }
                 self.push();
-                self.declare(variable, Ty::Int)?;
+                self.declare(variable, Ty::Int, true)?;
                 for stmt in body {
                     self.stmt(stmt, ret)?;
                 }
@@ -229,8 +248,14 @@ pub(crate) fn check(program: &[Top]) -> Result<(), String> {
         },
     );
     for t in program {
-        if let Top::Stmt(Stmt::Decl(ty, name, _)) = t {
-            c.declare(name, ty.clone())?;
+        match t {
+            Top::Stmt(Stmt::Decl(ty, name, _)) => {
+                c.declare(name, ty.clone(), true)?;
+            }
+            Top::Stmt(Stmt::ConstDecl(ty, name, _)) => {
+                c.declare(name, ty.clone(), false)?;
+            }
+            _ => {}
         }
     }
     for t in program {
@@ -266,14 +291,14 @@ pub(crate) fn check(program: &[Top]) -> Result<(), String> {
                             ));
                         }
                     }
-                    c.declare(&p.name, p.ty.clone())?;
+                    c.declare(&p.name, p.ty.clone(), true)?;
                 }
                 for s in &f.body {
                     c.stmt(s, &f.ret)?;
                 }
                 c.pop();
             }
-            Top::Stmt(Stmt::Decl(t, n, e)) => {
+            Top::Stmt(Stmt::Decl(t, n, e) | Stmt::ConstDecl(t, n, e)) => {
                 let got = c.expr(e)?;
                 if &got != t {
                     return Err(format!(

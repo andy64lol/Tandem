@@ -91,6 +91,7 @@ pub(crate) fn parse_printf_format(format: &str) -> Result<Vec<FormatPart>, Strin
 #[derive(Clone, Debug)]
 pub(crate) enum Stmt {
     Decl(Ty, String, Expr),
+    ConstDecl(Ty, String, Expr),
     Assign(String, String, Expr),
     Expr(Expr),
     If(Expr, Vec<Stmt>, Vec<Stmt>),

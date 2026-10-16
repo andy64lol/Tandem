@@ -34,6 +34,33 @@ mod tests {
     }
 
     #[test]
+    fn const_declarations_are_immutable() {
+        let source = r#"
+            const int maxLives = 3;
+
+            fn max_lives() -> int {
+                const int localMax = maxLives;
+                return localMax;
+            }
+
+            int currentMax = max_lives();
+        "#;
+        let lua = compile(source).unwrap();
+        assert!(lua.contains("maxLives = 3"));
+        assert!(lua.contains("local localMax = maxLives"));
+
+        assert!(compile("const int limit = 10; limit = 11;")
+            .unwrap_err()
+            .contains("cannot assign to constant 'limit'"));
+        assert!(compile("const int limit = 10; limit += 1;")
+            .unwrap_err()
+            .contains("cannot assign to constant 'limit'"));
+        assert!(compile("const int limit = \"wrong type\";")
+            .unwrap_err()
+            .contains("initializer is Str"));
+    }
+
+    #[test]
     fn concatenates_strings_with_plus_and_comma() {
         let source = r#"
             str first = "Hello";

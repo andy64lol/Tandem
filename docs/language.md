@@ -16,16 +16,17 @@ There are no implicit conversions. `int` and `float` are distinct static types, 
 
 ## Variables
 
-Every declaration has a type, name, and initializer:
+Mutable declarations have a type, name, and initializer. Prefix a declaration with `const` to make its binding immutable:
 
 ```tlua
 int score = 0;
 float gravity = 9.8;
 bool alive = true;
 str playerName = "Ada";
+const int maxLives = 3;
 ```
 
-Declarations inside functions and blocks become Lua locals. Top-level declarations become Lua globals.
+Declarations inside functions and blocks become Lua locals. Top-level declarations become Lua globals. A `const` binding can be read like any other variable, but TypeLua rejects assignments to it, including compound assignments. Its initializer must match its declared type. Constness is checked by the TypeLua compiler and is erased in generated Lua.
 
 ## Functions
 
@@ -71,7 +72,7 @@ for (i, 10) {
 
 Numeric `for` loops include their stop value. The forms are `for (name, stop)`, `for (name, start, stop)`, and `for (name, start, stop, step)`. The first form defaults to start `0` and step `1`; the second defaults to step `1`. All bounds and steps must be `int`. A negative step counts downward. The loop variable is an `int` scoped to the loop body. A zero step is rejected by the Lua runtime.
 
-Supported assignment operators are `=`, `+=`, `-=`, `*=`, and `/=`. Compound assignment is limited to numeric variables. Variables declared in a block are scoped to that block during checking.
+Supported assignment operators are `=`, `+=`, `-=`, `*=`, and `/=`. Compound assignment is limited to numeric variables, and no assignment operator may target a `const` binding. Variables declared in a block are scoped to that block during checking.
 
 ## Expressions
 

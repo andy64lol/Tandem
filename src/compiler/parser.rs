@@ -117,6 +117,17 @@ impl Parser {
         Ok(v)
     }
     fn stmt(&mut self) -> Result<Stmt, String> {
+        if self.eat_kw("const") {
+            let ty = self.ty()?;
+            if ty == Ty::Void {
+                return Err(self.err("const variables cannot have type 'void'".into()));
+            }
+            let name = self.expect_ident()?;
+            self.expect_sym("=")?;
+            let value = self.expr(0)?;
+            self.expect_sym(";")?;
+            return Ok(Stmt::ConstDecl(ty, name, value));
+        }
         if self.eat_kw("for") {
             self.expect_sym("(")?;
             let variable = self.expect_ident()?;

@@ -113,7 +113,7 @@ fn emit_stmts(
     let pad = "    ".repeat(indent);
     for s in stmts {
         match s {
-            Stmt::Decl(ty, n, e) => {
+            Stmt::Decl(ty, n, e) | Stmt::ConstDecl(ty, n, e) => {
                 let value = emit_expr(e, scopes, function_returns);
                 out.push_str(&format!("{pad}local {n} = {value}\n"));
                 scopes.last_mut().unwrap().insert(n.clone(), ty.clone());
@@ -195,7 +195,7 @@ pub(crate) fn generate(program: &[Top]) -> String {
             Top::Fun(function) => {
                 function_returns.insert(function.name.clone(), function.ret.clone());
             }
-            Top::Stmt(Stmt::Decl(ty, name, _)) => {
+            Top::Stmt(Stmt::Decl(ty, name, _) | Stmt::ConstDecl(ty, name, _)) => {
                 globals.insert(name.clone(), ty.clone());
             }
             Top::Stmt(_) => {}
@@ -236,7 +236,7 @@ pub(crate) fn generate(program: &[Top]) -> String {
                 scopes.pop();
                 out.push_str("end\n\n");
             }
-            Top::Stmt(Stmt::Decl(_, n, e)) => out.push_str(&format!(
+            Top::Stmt(Stmt::Decl(_, n, e) | Stmt::ConstDecl(_, n, e)) => out.push_str(&format!(
                 "{n} = {}\n",
                 emit_expr(e, &scopes, &function_returns)
             )),

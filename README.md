@@ -35,7 +35,7 @@ Or invoke the compiled binary directly:
 
 The compiled Lua is run after it is written. The Rust library also exposes `typelua::runtime::run_file("script.lua")` and `typelua::runtime::run_source(source, "chunk-name")` for embedding Lua execution in another Rust program.
 
-See the [documentation index](docs/README.md) for the [CLI guide](docs/cli.md), [language guide](docs/language.md), and [runtime/API guide](docs/runtime.md).
+See the [documentation index](docs/README.md) for the [CLI guide](docs/cli.md), [language guide](docs/language.md), [runtime/API guide](docs/runtime.md), and [TODO list](todo.md).
 
 ## Language specification (0.1)
 
@@ -49,6 +49,8 @@ See the [documentation index](docs/README.md) for the [CLI guide](docs/cli.md), 
 
 There are no implicit conversions. `int` and `float` are distinct static types even though both are represented by Lua numbers at runtime. Types are checked at compile time and erased in generated Lua.
 
+Prefix a typed declaration with `const` to prevent reassignment in TypeLua source. Its initializer must have the declared type. Constness is checked by the compiler and is erased in generated Lua.
+
 ### Declarations and functions
 
 ```cpp
@@ -56,6 +58,7 @@ int score = 0;
 float gravity = 9.8;
 bool alive = true;
 str playerName = "Ada";
+const int maxLives = 3;
 
 fn add(int a, int b) -> int {
     return a + b;
@@ -102,7 +105,7 @@ Supported assignment operators: `=`, `+=`, `-=`, `*=`, `/=`. Every statement end
 - Boolean logic: `&& ||`
 - Parentheses
 
-`+` supports two numbers of the same type or two strings. Comparisons require compatible operand types. Boolean operators require booleans. `print(...)` maps to Lua's `print` and accepts any number of arguments. `printf("Hello {name}")` accepts one string literal and interpolates variable names in braces.
+`+` supports two numbers of the same type or two strings. The comma operator also joins two strings; parenthesize comma concatenation when using it as a function argument, because commas separate arguments. Comparisons require compatible operand types. Boolean operators require booleans. `print(...)` maps to Lua's `print` and accepts any number of arguments. `printf("Hello {name}")` accepts one string literal and interpolates variable names in braces.
 
 ### Scope and restrictions
 
