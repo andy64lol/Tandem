@@ -90,10 +90,10 @@ pub(crate) fn parse_printf_format(format: &str) -> Result<Vec<FormatPart>, Strin
 
 #[derive(Clone, Debug)]
 pub(crate) enum Stmt {
-    Decl(Ty, String, Expr),
-    ConstDecl(Ty, String, Expr),
+    Decl(VarDecl),
     Assign(String, String, Expr),
     Expr(Expr),
+    Block(Vec<Stmt>),
     If(Expr, Vec<Stmt>, Vec<Stmt>),
     While(Expr, Vec<Stmt>),
     For {
@@ -104,6 +104,14 @@ pub(crate) enum Stmt {
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),
+}
+#[derive(Clone, Debug)]
+pub(crate) struct VarDecl {
+    pub(crate) ty: Ty,
+    pub(crate) name: String,
+    pub(crate) value: Expr,
+    pub(crate) is_const: bool,
+    pub(crate) is_local: bool,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Param {

@@ -1,4 +1,4 @@
-use crate::compiler::ast::{Expr, Fun, Param, Stmt, Top, Ty};
+use crate::compiler::ast::{Expr, Fun, Param, Stmt, Top, Ty, VarDecl};
 use crate::compiler::lexer::{Tok, Token};
 
 struct Parser {
@@ -57,6 +57,25 @@ impl Parser {
     fn ty(&mut self) -> Result<Ty, String> {
         let n = self.expect_ident()?;
         Ty::parse(&n).ok_or_else(|| self.err(format!("unknown type '{n}'")))
+    }
+    fn eat_modifier(&mut self, modifier: &str) -> bool {
+        if self.eat_kw(modifier) {
+            return true;
+        }
+        let parenthesized = self.sym("(")
+            && self.t.get(self.i + 1).map(|token| &token.kind)
+                == Some(&Tok::Ident(modifier.into()))
+            && self.t.get(self.i + 2).map(|token| &token.kind) == Some(&Tok::Sym(")".into()));
+        if parenthesized {
+            self.bump();
+            self.bump();
+            self.bump();
+        }
+        parenthesized
+    }
+    fn declaration(&mut self, is_local: bool, is_const: bool) -> Result<Stmt, String> {
+        let ty = self.ty()?;
+        self.declaration_after_type(ty, is_local, is_const)
     }
     fn program(&mut self) -> Result<Vec<Top>, String> {
         let mut v = vec![];
@@ -117,16 +136,28 @@ impl Parser {
         Ok(v)
     }
     fn stmt(&mut self) -> Result<Stmt, String> {
-        if self.eat_kw("const") {
-            let ty = self.ty()?;
-            if ty == Ty::Void {
-                return Err(self.err("const variables cannot have type 'void'".into()));
+        let mut is_local = false;
+        let mut is_const = false;
+        loop {
+            if self.eat_modifier("local") {
+                if is_local {
+                    return Err(self.err("duplicate 'local' modifier".into()));
+                }
+                is_local = true;
+            } else if self.eat_modifier("const") {
+                if is_const {
+                    return Err(self.err("duplicate 'const' modifier".into()));
+                }
+                is_const = true;
+            } else {
+                break;
             }
-            let name = self.expect_ident()?;
-            self.expect_sym("=")?;
-            let value = self.expr(0)?;
-            self.expect_sym(";")?;
-            return Ok(Stmt::ConstDecl(ty, name, value));
+        }
+        if is_local || is_const {
+            return self.declaration(is_local, is_const);
+        }
+        if self.sym("{") {
+            return Ok(Stmt::Block(self.block()?));
         }
         if self.eat_kw("for") {
             self.expect_sym("(")?;
@@ -181,14 +212,8 @@ impl Parser {
         }
         if let Tok::Ident(ref s) = self.cur().kind {
             if let Some(ty) = Ty::parse(s) {
-                if ty != Ty::Void {
-                    self.bump();
-                    let name = self.expect_ident()?;
-                    self.expect_sym("=")?;
-                    let e = self.expr(0)?;
-                    self.expect_sym(";")?;
-                    return Ok(Stmt::Decl(ty, name, e));
-                }
+                self.bump();
+                return self.declaration_after_type(ty, false, false);
             }
         }
         if let Tok::Ident(name) = self.cur().kind.clone() {
@@ -210,6 +235,27 @@ impl Parser {
         let e = self.expr(0)?;
         self.expect_sym(";")?;
         Ok(Stmt::Expr(e))
+    }
+    fn declaration_after_type(
+        &mut self,
+        ty: Ty,
+        is_local: bool,
+        is_const: bool,
+    ) -> Result<Stmt, String> {
+        if ty == Ty::Void {
+            return Err(self.err("variables cannot have type 'void'".into()));
+        }
+        let name = self.expect_ident()?;
+        self.expect_sym("=")?;
+        let value = self.expr(0)?;
+        self.expect_sym(";")?;
+        Ok(Stmt::Decl(VarDecl {
+            ty,
+            name,
+            value,
+            is_const,
+            is_local,
+        }))
     }
     fn prec(op: &str) -> Option<u8> {
         Some(match op {

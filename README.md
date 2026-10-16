@@ -49,7 +49,7 @@ See the [documentation index](docs/README.md) for the [CLI guide](docs/cli.md), 
 
 There are no implicit conversions. `int` and `float` are distinct static types even though both are represented by Lua numbers at runtime. Types are checked at compile time and erased in generated Lua.
 
-Prefix a typed declaration with `const` to prevent reassignment in TypeLua source. Its initializer must have the declared type. Constness is checked by the compiler and is erased in generated Lua.
+Prefix a typed declaration with `local` to make a top-level binding local to the generated Lua chunk. Prefix it with `const` to prevent reassignment in TypeLua source. The modifiers are optional and can be parenthesized, as in `(local) (const) int maxLives = 3;`. Constness is checked by the compiler and is erased in generated Lua.
 
 ### Declarations and functions
 
@@ -59,6 +59,7 @@ float gravity = 9.8;
 bool alive = true;
 str playerName = "Ada";
 const int maxLives = 3;
+local int scoreLimit = 100;
 
 fn add(int a, int b) -> int {
     return a + b;
@@ -93,7 +94,7 @@ return;
 
 Numeric loops include the stop value. `for (i, stop)` uses a start of `0` and step of `1`; `for (i, start, stop)` sets the start; and `for (i, start, stop, step)` sets all three. Start, stop, and step must be `int`. `printf` prints a string with `{variable}` interpolation; use `{{` or `}}` for literal braces.
 
-Supported assignment operators: `=`, `+=`, `-=`, `*=`, `/=`. Every statement ends in `;`. Blocks use braces. TypeLua accepts `//` line comments and `/* ... */` block comments, as well as Lua's `--` line comments and long comments such as `--[[ ... ]]` and `--[=[ ... ]=]`.
+Supported assignment operators: `=`, `+=`, `-=`, `*=`, `/=`. Assignments to `const` bindings are rejected. Every statement ends in `;`. Blocks use braces, and standalone `{ ... }` blocks create a nested scope. TypeLua accepts `//` line comments and `/* ... */` block comments, as well as Lua's `--` line comments and long comments such as `--[[ ... ]]` and `--[=[ ... ]=]`.
 
 ### Expressions
 

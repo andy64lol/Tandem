@@ -61,6 +61,29 @@ mod tests {
     }
 
     #[test]
+    fn supports_explicit_locals_and_standalone_scopes() {
+        let source = r#"
+            (local) (const) int maxLives = 3;
+
+            fn max_lives() -> int {
+                return maxLives;
+            }
+
+            {
+                int temporary = max_lives();
+                print(temporary);
+            }
+        "#;
+        let lua = compile(source).unwrap();
+        assert!(lua.contains("local maxLives\nmaxLives = 3\nfunction max_lives"));
+        assert!(lua.contains("do\n    local temporary = max_lives()"));
+        assert!(lua.contains("end\n"));
+
+        let err = compile("{ int scoped = 1; } print(scoped);").unwrap_err();
+        assert!(err.contains("unknown variable 'scoped'"));
+    }
+
+    #[test]
     fn concatenates_strings_with_plus_and_comma() {
         let source = r#"
             str first = "Hello";

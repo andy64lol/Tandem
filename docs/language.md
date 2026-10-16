@@ -16,7 +16,7 @@ There are no implicit conversions. `int` and `float` are distinct static types, 
 
 ## Variables
 
-Mutable declarations have a type, name, and initializer. Prefix a declaration with `const` to make its binding immutable:
+Declarations have a type, name, and initializer. Prefix one with `local` to make a top-level binding local to the generated Lua chunk, and prefix one with `const` to make it immutable in TypeLua source:
 
 ```tlua
 int score = 0;
@@ -24,9 +24,11 @@ float gravity = 9.8;
 bool alive = true;
 str playerName = "Ada";
 const int maxLives = 3;
+local int scoreLimit = 100;
+(local) (const) str edition = "standard";
 ```
 
-Declarations inside functions and blocks become Lua locals. Top-level declarations become Lua globals. A `const` binding can be read like any other variable, but TypeLua rejects assignments to it, including compound assignments. Its initializer must match its declared type. Constness is checked by the TypeLua compiler and is erased in generated Lua.
+The modifiers are optional, may appear in either order, and may be written with or without parentheses: `local const int limit = 10;` and `(local) (const) int limit = 10;` are equivalent. Inside functions and blocks, declarations are Lua locals whether or not `local` is written. At top level, declarations are Lua globals unless marked `local`; top-level locals are visible to functions in the same TypeLua file. A `const` binding can be read like any other variable, but TypeLua rejects assignments to it, including compound assignments. Its initializer must match its declared type. Constness is checked by the TypeLua compiler and is erased in generated Lua.
 
 ## Functions
 
@@ -72,7 +74,16 @@ for (i, 10) {
 
 Numeric `for` loops include their stop value. The forms are `for (name, stop)`, `for (name, start, stop)`, and `for (name, start, stop, step)`. The first form defaults to start `0` and step `1`; the second defaults to step `1`. All bounds and steps must be `int`. A negative step counts downward. The loop variable is an `int` scoped to the loop body. A zero step is rejected by the Lua runtime.
 
-Supported assignment operators are `=`, `+=`, `-=`, `*=`, and `/=`. Compound assignment is limited to numeric variables, and no assignment operator may target a `const` binding. Variables declared in a block are scoped to that block during checking.
+Supported assignment operators are `=`, `+=`, `-=`, `*=`, and `/=`. Compound assignment is limited to numeric variables, and no assignment operator may target a `const` binding. Variables declared in a block are scoped to that block during checking. Braces can also create a standalone scope:
+
+```tlua
+{
+    int temporary = 1;
+    print(temporary);
+}
+```
+
+The scope ends at `}`, and its declarations are unavailable afterward.
 
 ## Expressions
 

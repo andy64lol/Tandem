@@ -123,23 +123,15 @@ impl Checker {
     }
     fn stmt(&mut self, s: &Stmt, ret: &Ty) -> Result<(), String> {
         match s {
-            Stmt::Decl(t, n, e) => {
-                let got = self.expr(e)?;
-                if &got != t {
+            Stmt::Decl(decl) => {
+                let got = self.expr(&decl.value)?;
+                if got != decl.ty {
                     return Err(format!(
-                        "variable '{n}' declared {t:?}, initializer is {got:?}"
+                        "variable '{}' declared {:?}, initializer is {got:?}",
+                        decl.name, decl.ty
                     ));
                 }
-                self.declare(n, t.clone(), true)
-            }
-            Stmt::ConstDecl(t, n, e) => {
-                let got = self.expr(e)?;
-                if &got != t {
-                    return Err(format!(
-                        "constant '{n}' declared {t:?}, initializer is {got:?}"
-                    ));
-                }
-                self.declare(n, t.clone(), false)
+                self.declare(&decl.name, decl.ty.clone(), !decl.is_const)
             }
             Stmt::Assign(n, op, e) => {
                 let binding = self
@@ -169,6 +161,14 @@ impl Checker {
             }
             Stmt::Expr(e) => {
                 self.expr(e)?;
+                Ok(())
+            }
+            Stmt::Block(body) => {
+                self.push();
+                for stmt in body {
+                    self.stmt(stmt, ret)?;
+                }
+                self.pop();
                 Ok(())
             }
             Stmt::If(c, a, b) => {
@@ -249,11 +249,8 @@ pub(crate) fn check(program: &[Top]) -> Result<(), String> {
     );
     for t in program {
         match t {
-            Top::Stmt(Stmt::Decl(ty, name, _)) => {
-                c.declare(name, ty.clone(), true)?;
-            }
-            Top::Stmt(Stmt::ConstDecl(ty, name, _)) => {
-                c.declare(name, ty.clone(), false)?;
+            Top::Stmt(Stmt::Decl(decl)) => {
+                c.declare(&decl.name, decl.ty.clone(), !decl.is_const)?;
             }
             _ => {}
         }
@@ -298,11 +295,12 @@ pub(crate) fn check(program: &[Top]) -> Result<(), String> {
                 }
                 c.pop();
             }
-            Top::Stmt(Stmt::Decl(t, n, e) | Stmt::ConstDecl(t, n, e)) => {
-                let got = c.expr(e)?;
-                if &got != t {
+            Top::Stmt(Stmt::Decl(decl)) => {
+                let got = c.expr(&decl.value)?;
+                if got != decl.ty {
                     return Err(format!(
-                        "variable '{n}' declared {t:?}, initializer is {got:?}"
+                        "variable '{}' declared {:?}, initializer is {got:?}",
+                        decl.name, decl.ty
                     ));
                 }
             }
