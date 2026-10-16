@@ -18,8 +18,11 @@ fn lua_str(s: &str) -> String {
     o
 }
 
-fn lookup_type<'a>(name: &str, scopes: &'a [HashMap<String, Ty>]) -> Option<&'a Ty> {
-    scopes.iter().rev().find_map(|scope| scope.get(name))
+fn lookup_type(name: &str, scopes: &[HashMap<String, Ty>]) -> Option<Ty> {
+    scopes
+        .iter()
+        .rev()
+        .find_map(|scope| scope.get(name).cloned())
 }
 
 fn is_string_expr(
@@ -29,7 +32,7 @@ fn is_string_expr(
 ) -> bool {
     match expr {
         Expr::Str(_) => true,
-        Expr::Var(name) => lookup_type(name, scopes) == Some(&Ty::Str),
+        Expr::Var(name) => lookup_type(name, scopes) == Some(Ty::Str),
         Expr::Bin(left, op, right) if op == "+" || op == "," => {
             is_string_expr(left, scopes, function_returns)
                 && is_string_expr(right, scopes, function_returns)
