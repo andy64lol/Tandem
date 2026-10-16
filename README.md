@@ -35,95 +35,23 @@ Or invoke the compiled binary directly:
 
 The compiled Lua is run after it is written. The Rust library also exposes `typelua::runtime::run_file("script.lua")` and `typelua::runtime::run_source(source, "chunk-name")` for embedding Lua execution in another Rust program.
 
-See the [documentation index](docs/README.md) for the [CLI guide](docs/cli.md), [language guide](docs/language.md), [runtime/API guide](docs/runtime.md), and [TODO list](todo.md).
+See [The TypeLua Book](docs/README.md) for the full documentation, starting with the [introduction](docs/01-introduction.md) and [getting started](docs/02-getting-started.md). The reference chapters cover [types](docs/03-types.md), [variables](docs/04-variables.md), [functions](docs/05-functions.md), [statements](docs/06-statements.md), [expressions](docs/07-expressions.md), [comments](docs/08-comments.md), the [command line](docs/09-cli.md), the [Rust API](docs/10-rust-api.md), and [limitations](docs/11-limitations.md). The [TODO list](todo.md) tracks planned work.
 
-## Language specification (0.1)
+## Language at a glance
 
-### Types
+- **Types:** `int`, `float`, `bool`, `str`, and `void` (return type only). No implicit conversions; annotations are checked at compile time and erased in generated Lua.
+- **Declarations:** `type name = value;`, optionally marked `local` (a Lua local instead of a top-level global) and/or `const` (immutable in source).
+- **Functions:** `fn name(type param = default) -> type { ... }`, with trailing default parameters and optional return types.
+- **Statements:** `if`/`else`, `while`, numeric `for` (stop value included), assignment (`=`, `+=`, `-=`, `*=`, `/=`), `return`, and standalone blocks. Every statement ends in `;`.
+- **Expressions:** arithmetic, string concatenation with `+` or `,`, comparisons, `&&`/`||` logic, plus the built-ins `print(...)` and `printf("Hello {name}")`.
 
-- `int`: integer values
-- `float`: numeric values with a decimal point
-- `bool`: `true` or `false`
-- `str`: double-quoted strings
-- `void`: function return type only
+```tlua
+int playerX = 100;
 
-There are no implicit conversions. `int` and `float` are distinct static types even though both are represented by Lua numbers at runtime. Types are checked at compile time and erased in generated Lua.
-
-Prefix a typed declaration with `local` to make a top-level binding local to the generated Lua chunk. Prefix it with `const` to prevent reassignment in TypeLua source. The modifiers are optional and can be parenthesized, as in `(local) (const) int maxLives = 3;`. Constness is checked by the compiler and is erased in generated Lua.
-
-### Declarations and functions
-
-```cpp
-int score = 0;
-float gravity = 9.8;
-bool alive = true;
-str playerName = "Ada";
-const int maxLives = 3;
-local int scoreLimit = 100;
-
-fn add(int a, int b) -> int {
-    return a + b;
-}
-
-fn greet(str name = "world") -> void {
-    print("hello");
-}
-```
-
-Functions may declare a return type after `->`; if omitted, the return type defaults to `void`. Use `-> void` explicitly for functions that do not return a value when desired. Default arguments must be trailing. Default values are emitted as `if parameter == nil then ... end` checks in Lua. At this stage, a default expression should be a literal or another expression that is valid in the function's parameter scope; defaults are type-checked.
-
-### Statements
-
-```cpp
-if (alive) {
-    score += 1;
-} else {
-    score = 0;
-}
-
-while (score < 10) {
-    score += 1;
-}
-
-for (i, 10) {
-    printf("Hello world! {i}");
-}
-
-return;
-```
-
-Numeric loops include the stop value. `for (i, stop)` uses a start of `0` and step of `1`; `for (i, start, stop)` sets the start; and `for (i, start, stop, step)` sets all three. Start, stop, and step must be `int`. `printf` prints a string with `{variable}` interpolation; use `{{` or `}}` for literal braces.
-
-Supported assignment operators: `=`, `+=`, `-=`, `*=`, `/=`. Assignments to `const` bindings are rejected. Every statement ends in `;`. Blocks use braces, and standalone `{ ... }` blocks create a nested scope. TypeLua accepts `//` line comments and `/* ... */` block comments, as well as Lua's `--` line comments and long comments such as `--[[ ... ]]` and `--[=[ ... ]=]`.
-
-### Expressions
-
-- Literals: integer, decimal float, string, `true`, `false`
-- Variables and function calls
-- Unary `!` and `-`
-- Arithmetic: `+ - * / %`
-- Comparisons: `== != < > <= >=`
-- Boolean logic: `&& ||`
-- Parentheses
-
-`+` supports two numbers of the same type or two strings. The comma operator also joins two strings; parenthesize comma concatenation when using it as a function argument, because commas separate arguments. Comparisons require compatible operand types. Boolean operators require booleans. `print(...)` maps to Lua's `print` and accepts any number of arguments. `printf("Hello {name}")` accepts one string literal and interpolates variable names in braces.
-
-### Scope and restrictions
-
-- Variables declared in a block are local to that block in the static checker.
-- Function parameters and declarations are statically checked.
-- Function declarations may appear anywhere in the source and are resolved before checking function bodies, so forward calls work.
-- Current limitations: no arrays/objects, imports/modules, structs, classes, generics, closures, inferred types, optional types, user-defined operators, or full Lua standard library typings. No definite-return analysis yet. The runtime `while (true)` loop is supported, but a game engine must provide its own frame/update loop and input API.
-- Current implementation has a simple parser and checker; error recovery and source maps are not implemented.
-
-## Example
-
-```cpp
 fn movePlayer(int speed = 10) -> int {
     return speed + 1;
 }
 
-int playerX = 100;
 playerX += movePlayer(20);
 if (playerX > 100) {
     print("Player moved!");

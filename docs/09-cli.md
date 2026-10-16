@@ -1,4 +1,11 @@
-# Command line guide
+# 9. Command line
+
+## Synopsis
+
+```
+typelua <input.tlua|script.lua> [output.lua or script arguments...]
+typelua --check <input.tlua>
+```
 
 ## Build
 
@@ -16,7 +23,7 @@ TypeLua source files use the `.tlua` extension. Compilation writes a `.lua` file
 
 ```sh
 typelua examples/hello.tlua
-# writes examples/hello.lua and runs it
+# compiled examples/hello.tlua -> examples/hello.lua
 ```
 
 Choose another output path by passing it as the second argument:
@@ -34,10 +41,11 @@ cargo run -- examples/hello.tlua examples/hello-custom.lua
 
 ## Check without running
 
-`--check` parses and type-checks the file. It does not write or execute generated Lua:
+`--check` parses and type-checks the file. It does not write or execute generated Lua, and on success prints `{path}: OK`:
 
 ```sh
 typelua --check examples/hello.tlua
+# examples/hello.tlua: OK
 cargo run -- --check examples/hello.tlua
 ```
 
@@ -54,4 +62,10 @@ The `.lua` file is run as written; it is not parsed as TypeLua or transpiled.
 
 ## Errors
 
-Source and Lua runtime errors are printed to standard error, and the command exits with a nonzero status. A TypeLua compile error prevents output generation. A Lua runtime error happens after the output file has been written, so the generated file remains available for inspection.
+Source and Lua runtime errors are printed to standard error, and the command exits with a nonzero status:
+
+- A TypeLua compile error is printed as `TypeLua error: ...`. It prevents output generation and exits with status 1.
+- A Lua runtime error happens after the output file has been written, so the generated file remains available for inspection. The command exits with status 1.
+- An invalid command line prints the usage message and exits with status 2.
+
+On success the command exits with status 0.

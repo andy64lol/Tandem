@@ -1,4 +1,4 @@
-# Embedded Lua runtime and Rust API
+# 10. Rust API
 
 TypeLua uses [`mlua`](https://docs.rs/mlua/) with Lua 5.4 and its vendored Lua build. The Rust library exposes the compiler and runtime as separate modules:
 
