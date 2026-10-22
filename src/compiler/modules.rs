@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::compiler::ast::{Export, FnSig, ModuleExports, Stmt, Top};
+use crate::compiler::ast::{retyped_global_names, Export, FnSig, ModuleExports, Stmt, Top, Ty};
 use crate::compiler::{lexer, parser};
 
 pub(crate) struct LoadedModules {
@@ -46,6 +46,16 @@ impl<'a> Loader<'a> {
             return Err(format!("cyclic import of module '{id}'"));
         }
         let file = resolve(dir, id);
+        if !file.is_file() {
+            self.exports.insert(
+                id.to_string(),
+                ModuleExports {
+                    dynamic: true,
+                    ..ModuleExports::default()
+                },
+            );
+            return Ok(());
+        }
         let source = fs::read_to_string(&file).map_err(|_| {
             format!(
                 "cannot find module '{id}' (looked for {})",
@@ -79,18 +89,20 @@ fn resolve(dir: &Path, id: &str) -> PathBuf {
 
 fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
     let mut exports = ModuleExports::default();
-    let mut insert = |name: &str, export: Export| -> Result<(), String> {
+    let retyped_globals = retyped_global_names(program);
+    fn insert(exports: &mut ModuleExports, name: &str, export: Export) -> Result<(), String> {
         if exports.items.contains_key(name) {
             return Err(format!("duplicate module member '{name}'"));
         }
         exports.items.insert(name.to_string(), export);
         Ok(())
-    };
+    }
     for top in program {
         match top {
             Top::Fun(function) => {
                 let required = function.params.iter().take_while(|p| p.default.is_none()).count();
                 insert(
+                    &mut exports,
                     &function.name,
                     Export::Fn(FnSig {
                         args: function.params.iter().map(|p| p.ty.clone()).collect(),
@@ -99,7 +111,32 @@ fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
                     }),
                 )?;
             }
-            Top::Stmt(Stmt::Decl(decl)) => insert(&decl.name, Export::Var(decl.ty.clone()))?,
+            Top::Stmt(Stmt::Decl(decl)) => {
+                if let Some(Export::Var(existing)) = exports.items.get(&decl.name) {
+                    let compatible = match (&decl.ty, existing) {
+                        (Ty::Dict, Ty::Dict) => true,
+                        (Ty::List(left), Ty::List(right)) => left == right,
+                        (Ty::Tuple(_), Ty::Tuple(_)) => true,
+                        _ => false,
+                    };
+                    if !compatible {
+                        return Err(format!(
+                            "duplicate module member '{}' changes its declared type",
+                            decl.name
+                        ));
+                    }
+                } else {
+                    insert(
+                        &mut exports,
+                        &decl.name,
+                        Export::Var(if retyped_globals.contains(&decl.name) {
+                            Ty::Any
+                        } else {
+                            decl.ty.clone()
+                        }),
+                    )?;
+                }
+            }
             _ => {}
         }
     }
@@ -111,6 +148,7 @@ fn collect_requires(program: &[Top], out: &mut Vec<String>) {
         match top {
             Top::Fun(function) => collect_stmt_requires(&function.body, out),
             Top::Stmt(stmt) => collect_stmt_requires(std::slice::from_ref(stmt), out),
+            Top::Struct(_) => {}
         }
     }
 }
@@ -120,6 +158,15 @@ fn collect_stmt_requires(stmts: &[Stmt], out: &mut Vec<String>) {
         match stmt {
             Stmt::Decl(decl) => collect_expr_requires(&decl.value, out),
             Stmt::Assign(_, _, value) => collect_expr_requires(value, out),
+            Stmt::AssignMember(base, _, _, value) => {
+                collect_expr_requires(base, out);
+                collect_expr_requires(value, out);
+            }
+            Stmt::AssignIndex(base, index, _, value) => {
+                collect_expr_requires(base, out);
+                collect_expr_requires(index, out);
+                collect_expr_requires(value, out);
+            }
             Stmt::Require(path) => push_unique(out, path),
             Stmt::Expr(expr) => collect_expr_requires(expr, out),
             Stmt::Block(body) => collect_stmt_requires(body, out),
@@ -167,6 +214,7 @@ fn collect_expr_requires(expr: &crate::compiler::ast::Expr, out: &mut Vec<String
             }
         }
         Expr::Unary(_, inner) => collect_expr_requires(inner, out),
+        Expr::Cast(value, _) => collect_expr_requires(value, out),
         Expr::Bin(left, _, right) => {
             collect_expr_requires(left, out);
             collect_expr_requires(right, out);
@@ -176,6 +224,27 @@ fn collect_expr_requires(expr: &crate::compiler::ast::Expr, out: &mut Vec<String
             collect_expr_requires(base, out);
             for arg in args {
                 collect_expr_requires(arg, out);
+            }
+        }
+        Expr::Index(base, index) => {
+            collect_expr_requires(base, out);
+            collect_expr_requires(index, out);
+        }
+        Expr::Table(fields) => {
+            for (_, value) in fields {
+                collect_expr_requires(value, out);
+            }
+        }
+        Expr::List(values) => {
+            for value in values {
+                if let crate::compiler::ast::ListElement::Value(value) = value {
+                    collect_expr_requires(value, out);
+                }
+            }
+        }
+        Expr::Tuple(values) => {
+            for value in values {
+                collect_expr_requires(value, out);
             }
         }
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Var(_) => {}

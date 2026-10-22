@@ -2,7 +2,7 @@
 
 TypeLua is an experimental, statically typed, C-style language that transpiles to Lua 5.4. It is inspired by the idea of TypeScript for Lua: keep Lua as the runtime target, but give authors familiar syntax and compile-time type checks.
 
-**Status:** proof-of-concept compiler and runtime, version 0.1.0. This is not production-ready.
+**Status:** proof-of-concept compiler and runtime, version 0.1.1. This is not production-ready.
 
 ## How compilation works
 

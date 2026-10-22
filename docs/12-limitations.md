@@ -1,10 +1,10 @@
 # 12. Limitations
 
-TypeLua 0.1 is a small proof of concept. The language does not currently implement:
+TypeLua 0.1.1 is a small proof of concept. The language does not currently implement:
 
-- arrays, objects, or any collection and record types;
 - imports or modules for splitting programs across `.tlua` files;
-- structs, classes, or generics;
+- classes, inheritance, or generics;
+- static value typing for values read from generic `table` and `dict` collections;
 - closures or first-class functions;
 - inferred or optional types;
 - user-defined operators;

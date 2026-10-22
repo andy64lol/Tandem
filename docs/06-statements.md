@@ -4,7 +4,7 @@ Every statement ends in `;`. Blocks use braces. Declarations are covered in [Var
 
 ## Assignment
 
-Supported assignment operators are `=`, `+=`, `-=`, `*=`, and `/=`. The target must be a known, mutable variable. Compound assignment is limited to numeric variables, and no assignment operator may target a `const` binding. The right-hand side must have the target's type.
+Supported assignment operators are `=`, `+=`, `-=`, `*=`, and `/=`. Targets can be variables, struct or table fields, tuple element indexes, and dictionary or generic table indexes. Compound assignment requires a numeric target when the target type is known. A variable declared `const` cannot be reassigned. Dictionary fields can be updated, while lists can only be changed by replacing the whole list. Tuple values and elements can change only if the tuple keeps its original length and each position keeps its original type; a `const tuple` cannot be changed.
 
 ```tlua
 int score = 0;
@@ -13,6 +13,16 @@ score += 1;
 score -= 1;
 score *= 2;
 score /= 2;
+
+list int scores = [10, 20];
+scores = [..., 12];
+// scores[1] = 12; // error: replace the whole list instead
+
+tuple position = (0, 10, 11);
+position[1] = 5; // valid: position 1 is still an int
+
+dict player = { name = "Andy", age = 15, elo = 500 };
+player.age = 16;
 ```
 
 ## if

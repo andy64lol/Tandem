@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::compiler::ast::{module_basename, parse_printf_format, Expr, FormatPart, Stmt, Top, Ty};
+use crate::compiler::ast::{
+    module_basename, parse_printf_format, retyped_global_names, Expr, FormatPart, ListElement, Stmt,
+    Top, Ty,
+};
 
 fn lua_str(s: &str) -> String {
     let mut o = String::from("\"");
@@ -25,6 +28,98 @@ fn lookup_type(name: &str, scopes: &[HashMap<String, Ty>]) -> Option<Ty> {
         .find_map(|scope| scope.get(name).cloned())
 }
 
+fn update_type(name: &str, ty: Ty, scopes: &mut [HashMap<String, Ty>]) {
+    for scope in scopes.iter_mut().rev() {
+        if scope.contains_key(name) {
+            scope.insert(name.to_owned(), ty);
+            return;
+        }
+    }
+}
+
+fn inferred_expr_type(
+    expr: &Expr,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+) -> Option<Ty> {
+    match expr {
+        Expr::Int(_) => Some(Ty::Int),
+        Expr::Float(_) => Some(Ty::Float),
+        Expr::Str(_) => Some(Ty::Str),
+        Expr::Bool(_) => Some(Ty::Bool),
+        Expr::Var(name) => lookup_type(name, scopes),
+        Expr::Cast(_, ty) => Some(ty.clone()),
+        Expr::Unary(_, value) => inferred_expr_type(value, scopes, function_returns),
+        Expr::Bin(left, op, right) => {
+            let left_ty = inferred_expr_type(left, scopes, function_returns)?;
+            let right_ty = inferred_expr_type(right, scopes, function_returns)?;
+            if left_ty == right_ty
+                && (left_ty == Ty::Str
+                    || left_ty == Ty::Int
+                    || left_ty == Ty::Float
+                    || left_ty == Ty::Bool)
+            {
+                Some(if matches!(op.as_str(), "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||") {
+                    Ty::Bool
+                } else {
+                    left_ty
+                })
+            } else {
+                None
+            }
+        }
+        Expr::Call(name, _) => function_returns.get(name).cloned(),
+        Expr::Member(_, _) | Expr::MethodCall(_, _, _) => None,
+        Expr::Index(base, index) => match inferred_expr_type(base, scopes, function_returns)? {
+            Ty::List(element_ty) => Some(*element_ty),
+            Ty::Tuple(Some(elements)) => match index.as_ref() {
+                Expr::Int(index) if *index > 0 => elements.get(*index as usize - 1).cloned(),
+                _ => Some(Ty::Any),
+            },
+            Ty::Tuple(None) | Ty::Table | Ty::Dict => Some(Ty::Any),
+            _ => None,
+        },
+        Expr::Table(_) => Some(Ty::Table),
+        Expr::List(values) => {
+            let mut element_ty = None;
+            for value in values {
+                let ListElement::Value(value) = value else {
+                    return None;
+                };
+                let ty = inferred_expr_type(value, scopes, function_returns)?;
+                if element_ty.as_ref().is_some_and(|element| element != &ty) {
+                    return None;
+                }
+                element_ty = Some(ty);
+            }
+            Some(Ty::List(Box::new(element_ty.unwrap_or(Ty::Any))))
+        }
+        Expr::Tuple(values) => values
+            .iter()
+            .map(|value| inferred_expr_type(value, scopes, function_returns))
+            .collect::<Option<Vec<_>>>()
+            .map(|types| Ty::Tuple(Some(types))),
+    }
+}
+
+fn merge_types(
+    scopes: &mut [HashMap<String, Ty>],
+    left: &[HashMap<String, Ty>],
+    right: &[HashMap<String, Ty>],
+) {
+    for (index, scope) in scopes.iter_mut().enumerate() {
+        for (name, ty) in scope {
+            let left_ty = left.get(index).and_then(|types| types.get(name));
+            let right_ty = right.get(index).and_then(|types| types.get(name));
+            *ty = match (left_ty, right_ty) {
+                (Some(left_ty), Some(right_ty)) if left_ty == right_ty => left_ty.clone(),
+                (Some(_), Some(_)) => Ty::Any,
+                _ => ty.clone(),
+            };
+        }
+    }
+}
+
 fn is_string_expr(
     expr: &Expr,
     scopes: &[HashMap<String, Ty>],
@@ -38,6 +133,10 @@ fn is_string_expr(
                 && is_string_expr(right, scopes, function_returns)
         }
         Expr::Call(name, _) => function_returns.get(name) == Some(&Ty::Str),
+        Expr::Cast(_, Ty::Str) => true,
+        Expr::Index(_, _) => {
+            inferred_expr_type(expr, scopes, function_returns) == Some(Ty::Str)
+        }
         _ => false,
     }
 }
@@ -110,7 +209,77 @@ fn emit_expr(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Expr::Index(base, index) => format!(
+            "{}[{}]",
+            emit_expr(base, scopes, function_returns),
+            emit_expr(index, scopes, function_returns)
+        ),
+        Expr::Cast(value, _) => emit_expr(value, scopes, function_returns),
+        Expr::Table(fields) => format!(
+            "{{ {} }}",
+            fields
+                .iter()
+                .map(|(name, value)| {
+                    let value = emit_expr(value, scopes, function_returns);
+                    match name {
+                        Some(name) => format!("{name} = {value}"),
+                        None => value,
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expr::List(values) => format!(
+            "{{ {} }}",
+            values
+                .iter()
+                .map(|value| match value {
+                    ListElement::Value(value) => emit_expr(value, scopes, function_returns),
+                    ListElement::Previous => unreachable!("list preservation needs its old binding"),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expr::Tuple(values) => format!(
+            "{{ {} }}",
+            values
+                .iter()
+                .map(|value| emit_expr(value, scopes, function_returns))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
+}
+
+fn emit_list_replacement(
+    name: &str,
+    expr: &Expr,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+) -> Option<String> {
+    let Expr::List(values) = expr else {
+        return None;
+    };
+    if !values
+        .iter()
+        .any(|value| matches!(value, ListElement::Previous))
+    {
+        return None;
+    }
+    let elements = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| match value {
+            ListElement::Value(value) => emit_expr(value, scopes, function_returns),
+            ListElement::Previous => format!(
+                "(function(v) if v == nil then error(\"list preservation index {} is out of range\") end return v end)(old[{}])",
+                index + 1,
+                index + 1
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!("(function(old) return {{ {elements} }} end)({name})"))
 }
 
 fn emit_stmts(
@@ -124,12 +293,22 @@ fn emit_stmts(
     for s in stmts {
         match s {
             Stmt::Decl(decl) => {
-                let value = emit_expr(&decl.value, scopes, function_returns);
-                out.push_str(&format!("{pad}local {} = {value}\n", decl.name));
-                scopes
-                    .last_mut()
-                    .unwrap()
-                    .insert(decl.name.clone(), decl.ty.clone());
+                let value = emit_list_replacement(
+                    &decl.name,
+                    &decl.value,
+                    scopes,
+                    function_returns,
+                )
+                .unwrap_or_else(|| emit_expr(&decl.value, scopes, function_returns));
+                let ty = inferred_expr_type(&decl.value, scopes, function_returns)
+                    .unwrap_or_else(|| decl.ty.clone());
+                let current_scope = scopes.last_mut().unwrap();
+                if current_scope.contains_key(&decl.name) {
+                    out.push_str(&format!("{pad}{} = {value}\n", decl.name));
+                } else {
+                    out.push_str(&format!("{pad}local {} = {value}\n", decl.name));
+                }
+                current_scope.insert(decl.name.clone(), ty);
             }
             Stmt::Require(path) => {
                 let namespace = module_basename(path);
@@ -143,12 +322,40 @@ fn emit_stmts(
                     .insert(namespace, Ty::Module(path.clone()));
             }
             Stmt::Assign(n, op, e) => {
-                let value = emit_expr(e, scopes, function_returns);
+                let value = emit_list_replacement(n, e, scopes, function_returns)
+                    .unwrap_or_else(|| emit_expr(e, scopes, function_returns));
                 if op == "=" {
                     out.push_str(&format!("{pad}{n} = {value}\n"));
+                    if let Expr::Cast(_, ty) = e {
+                        update_type(n, ty.clone(), scopes);
+                    }
                 } else {
                     let base = op.trim_end_matches('=');
                     out.push_str(&format!("{pad}{n} = {n} {base} {value}\n"));
+                }
+            }
+            Stmt::AssignMember(base, name, op, e) => {
+                let target = format!("{}.{}", emit_expr(base, scopes, function_returns), name);
+                let value = emit_expr(e, scopes, function_returns);
+                if op == "=" {
+                    out.push_str(&format!("{pad}{target} = {value}\n"));
+                } else {
+                    let base_op = op.trim_end_matches('=');
+                    out.push_str(&format!("{pad}{target} = {target} {base_op} {value}\n"));
+                }
+            }
+            Stmt::AssignIndex(base, index, op, e) => {
+                let target = format!(
+                    "{}[{}]",
+                    emit_expr(base, scopes, function_returns),
+                    emit_expr(index, scopes, function_returns)
+                );
+                let value = emit_expr(e, scopes, function_returns);
+                if op == "=" {
+                    out.push_str(&format!("{pad}{target} = {value}\n"));
+                } else {
+                    let base_op = op.trim_end_matches('=');
+                    out.push_str(&format!("{pad}{target} = {target} {base_op} {value}\n"));
                 }
             }
             Stmt::Expr(e) => out.push_str(&format!(
@@ -163,6 +370,7 @@ fn emit_stmts(
                 out.push_str(&format!("{pad}end\n"));
             }
             Stmt::If(c, a, b) => {
+                let before = scopes.clone();
                 out.push_str(&format!(
                     "{pad}if {} then\n",
                     emit_expr(c, scopes, function_returns)
@@ -170,15 +378,20 @@ fn emit_stmts(
                 scopes.push(HashMap::new());
                 emit_stmts(a, out, indent + 1, scopes, function_returns);
                 scopes.pop();
+                let yes_types = scopes.clone();
+                *scopes = before.clone();
                 if !b.is_empty() {
                     out.push_str(&format!("{pad}else\n"));
                     scopes.push(HashMap::new());
                     emit_stmts(b, out, indent + 1, scopes, function_returns);
                     scopes.pop();
                 }
+                let no_types = scopes.clone();
+                merge_types(scopes, &yes_types, &no_types);
                 out.push_str(&format!("{pad}end\n"));
             }
             Stmt::While(c, b) => {
+                let before = scopes.clone();
                 out.push_str(&format!(
                     "{pad}while {} do\n",
                     emit_expr(c, scopes, function_returns)
@@ -186,6 +399,8 @@ fn emit_stmts(
                 scopes.push(HashMap::new());
                 emit_stmts(b, out, indent + 1, scopes, function_returns);
                 scopes.pop();
+                let after = scopes.clone();
+                merge_types(scopes, &before, &after);
                 out.push_str(&format!("{pad}end\n"));
             }
             Stmt::For {
@@ -195,6 +410,7 @@ fn emit_stmts(
                 step,
                 body,
             } => {
+                let before = scopes.clone();
                 out.push_str(&format!(
                     "{pad}for {variable} = {}, {}, {} do\n",
                     emit_expr(start, scopes, function_returns),
@@ -206,6 +422,8 @@ fn emit_stmts(
                 scopes.push(loop_scope);
                 emit_stmts(body, out, indent + 1, scopes, function_returns);
                 scopes.pop();
+                let after = scopes.clone();
+                merge_types(scopes, &before, &after);
                 out.push_str(&format!("{pad}end\n"));
             }
             Stmt::Return(e) => out.push_str(&format!(
@@ -219,7 +437,7 @@ fn emit_stmts(
 }
 
 pub(crate) fn generate(program: &[Top], modules: &[(String, Vec<Top>)]) -> String {
-    let mut out = String::from("-- Generated by TypeLua 0.1.0. Do not edit this file.\n");
+    let mut out = String::from("-- Generated by TypeLua 0.1.1. Do not edit this file.\n");
     for (id, module_program) in modules {
         out.push_str(&format!("package.preload[{}] = function()\n", lua_str(id)));
         out.push_str(&emit_program(module_program, true));
@@ -245,19 +463,25 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                 }
             }
             Top::Stmt(Stmt::Decl(decl)) => {
-                globals.insert(decl.name.clone(), decl.ty.clone());
-                if decl.is_local || module_mode {
+                if !globals.contains_key(&decl.name) {
+                    let ty = inferred_expr_type(&decl.value, &[], &function_returns)
+                        .unwrap_or_else(|| decl.ty.clone());
+                    globals.insert(decl.name.clone(), ty);
+                }
+                if (decl.is_local || module_mode) && !local_globals.contains(&decl.name) {
                     local_globals.push(decl.name.clone());
                 }
-                if module_mode {
+                if module_mode && !export_names.contains(&decl.name) {
                     export_names.push(decl.name.clone());
                 }
             }
             Top::Stmt(_) => {}
+            Top::Struct(_) => {}
         }
     }
 
     let mut scopes = vec![globals];
+    let unstable_globals = retyped_global_names(program);
     let mut out = String::new();
     let mut locals: Vec<String> = Vec::new();
     if module_mode {
@@ -272,6 +496,12 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
     for t in program {
         match t {
             Top::Fun(f) => {
+                let outer_scopes = scopes.clone();
+                if let Some(global_scope) = scopes.first_mut() {
+                    for name in &unstable_globals {
+                        global_scope.insert(name.clone(), Ty::Any);
+                    }
+                }
                 let params = f
                     .params
                     .iter()
@@ -301,13 +531,22 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                 }
                 emit_stmts(&f.body, &mut out, 1, &mut scopes, &function_returns);
                 scopes.pop();
+                scopes = outer_scopes;
                 out.push_str("end\n\n");
             }
-            Top::Stmt(Stmt::Decl(decl)) => out.push_str(&format!(
-                "{} = {}\n",
-                decl.name,
-                emit_expr(&decl.value, &scopes, &function_returns)
-            )),
+            Top::Stmt(Stmt::Decl(decl)) => {
+                let value = emit_list_replacement(
+                    &decl.name,
+                    &decl.value,
+                    &scopes,
+                    &function_returns,
+                )
+                .unwrap_or_else(|| emit_expr(&decl.value, &scopes, &function_returns));
+                out.push_str(&format!("{} = {value}\n", decl.name));
+                if let Expr::Cast(_, ty) = &decl.value {
+                    update_type(&decl.name, ty.clone(), &mut scopes);
+                }
+            }
             Top::Stmt(s) => emit_stmts(
                 std::slice::from_ref(s),
                 &mut out,
@@ -315,6 +554,7 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                 &mut scopes,
                 &function_returns,
             ),
+            Top::Struct(_) => {}
         }
     }
     if module_mode {

@@ -313,10 +313,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_module_errors() {
-        let diagnostics = with_modules(&[], "require(\"nope\");").unwrap_err();
-        assert!(diagnostics
-            .iter()
-            .any(|d| d.message.contains("cannot find module")));
+    fn missing_modules_are_dynamic() {
+        let lua = with_modules(&[], "require(\"nope\");\nprint(nope.anything);").unwrap();
+        assert!(lua.contains("require(\"nope\")"));
     }
 }

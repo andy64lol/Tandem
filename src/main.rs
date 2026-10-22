@@ -15,7 +15,7 @@ fn report(diagnostics: &[Diagnostic]) {
 
 fn usage() -> ! {
     eprintln!(
-        "Usage: typelua <input.tlua|script.lua> [output.lua or script arguments...]\n       typelua --check <input.tlua>\n       typelua --version"
+        "Usage: typelua <input.tlua|script.lua> [output.lua or script arguments...]\n       typelua --check <input.tlua>\n       typelua --version\n       typelua pkg install [project-dir]"
     );
     process::exit(2)
 }
@@ -31,6 +31,19 @@ fn main() {
             usage();
         }
         println!("typelua {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    if args[1] == "pkg" {
+        if args.len() < 3 || args.len() > 4 || args[2] != "install" {
+            usage();
+        }
+        let root = args.get(3).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+        typelua::packages::install(&root).unwrap_or_else(|error| {
+            eprintln!("{error}");
+            process::exit(1)
+        });
+        println!("installed Lua packages for {}", root.display());
         return;
     }
 
@@ -91,7 +104,7 @@ fn main() {
         input_path.display(),
         output_path.display()
     );
-    runtime::run_file(&output_path).unwrap_or_else(|error| {
+    runtime::run_file_with_args_in(&output_path, &[], parent).unwrap_or_else(|error| {
         eprintln!("{error}");
         process::exit(1)
     });

@@ -1,6 +1,6 @@
 # 3. Types
 
-TypeLua 0.1 has five types. Types are checked at compile time and erased in generated Lua.
+Primitive types and collection types are checked at compile time and erased in generated Lua. Struct types retain their field names at runtime as ordinary Lua tables.
 
 | Type | Values | Lua representation |
 | --- | --- | --- |
@@ -8,9 +8,47 @@ TypeLua 0.1 has five types. Types are checked at compile time and erased in gene
 | `float` | Decimal literals such as `3.5` | `number` |
 | `bool` | `true` or `false` | `boolean` |
 | `str` | Double-quoted strings | `string` |
+| `table` | A Lua table with dynamically typed values | `table` |
+| `dict` | Named, dynamically typed values | `table` |
+| `list Type` | Ordered values that all have the given type | `table` |
+| `tuple` | Ordered values with a fixed length and a fixed type at each position | `table` |
 | `void` | No return value; function return type only | `nil` |
 
 There are no implicit conversions. `int` and `float` are distinct static types, even though both use Lua numbers at runtime.
+
+Lists use a type after `list`, for example `list int scores = [10, 20, 30];`. List elements must match that type. Lists use square brackets and Lua's one-based indexes. Do not use `int[]`; curly braces are for tables and dictionaries, and parentheses are for tuples.
+
+Use `dict` for named keys, `list Type` for resizable ordered values of one type, and `tuple` for an ordered group whose length and positional types are inferred from its first value. These collections compile to Lua tables. Values read from a generic `table` or `dict`, and values exported by dynamic modules, have no statically known type. They require an explicit `as type` assertion to assign them to a statically typed variable, field, or parameter. List reads retain the list's element type, and tuple reads at a constant index retain that position's type. An assertion does not convert or validate the value at runtime.
+
+Structs define named fields and their types:
+
+```tlua
+struct Point {
+    float x;
+    float y;
+}
+
+Point origin = { x = 0.0, y = 0.0 };
+origin.x = 2.0;
+```
+
+Struct initializers must provide each field exactly once with a matching value type. Struct declarations are top-level. Their values compile to Lua tables.
+
+```tlua
+table options = { debug = true, retries = 3 };
+print(options["debug"]);
+
+dict player = { name = "Maria", age = 35, points = 500 };
+player.age = 16;
+list int scores = [10, 20, 30];
+scores = [..., 12, ...];
+tuple position = (0, 10, 11);
+tuple position = (4, 10, 11); // same length and positional types
+position[1] = 5;
+int x = position[1];
+```
+
+Lists and tuples use Lua's one-based indexing. A list can only be changed by assigning a replacement list; list index assignment is rejected. In a list replacement, each `...` keeps the old value at that position, and `...` is only valid in lists. Tuples can be reassigned or updated by index only while keeping the original length and type at every position. `as type` inside a tuple initializer is allowed only for `const tuple`, which locks the whole tuple. A variable cannot be made const after its first declaration. Lists and dictionaries can be redefined only while their variable is mutable; a list redefinition keeps its element type.
 
 ## Literals
 

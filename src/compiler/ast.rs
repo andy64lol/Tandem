@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Ty {
@@ -8,6 +8,12 @@ pub(crate) enum Ty {
     Str,
     Void,
     Module(String),
+    Table,
+    Dict,
+    List(Box<Ty>),
+    Tuple(Option<Vec<Ty>>),
+    Any,
+    Struct(String),
 }
 impl Ty {
     pub(crate) fn parse(s: &str) -> Option<Self> {
@@ -17,6 +23,9 @@ impl Ty {
             "bool" => Some(Self::Bool),
             "str" => Some(Self::Str),
             "void" => Some(Self::Void),
+            "table" => Some(Self::Table),
+            "dict" => Some(Self::Dict),
+            "tuple" => Some(Self::Tuple(None)),
             _ => None,
         }
     }
@@ -34,6 +43,17 @@ pub(crate) enum Expr {
     Call(String, Vec<Expr>),
     Member(Box<Expr>, String),
     MethodCall(Box<Expr>, String, Vec<Expr>),
+    Index(Box<Expr>, Box<Expr>),
+    Cast(Box<Expr>, Ty),
+    Table(Vec<(Option<String>, Expr)>),
+    List(Vec<ListElement>),
+    Tuple(Vec<Expr>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ListElement {
+    Value(Expr),
+    Previous,
 }
 
 #[derive(Clone)]
@@ -52,6 +72,7 @@ pub(crate) enum Export {
 #[derive(Clone, Default)]
 pub(crate) struct ModuleExports {
     pub(crate) items: HashMap<String, Export>,
+    pub(crate) dynamic: bool,
 }
 
 pub(crate) fn module_basename(path: &str) -> String {
@@ -120,6 +141,8 @@ pub(crate) fn parse_printf_format(format: &str) -> Result<Vec<FormatPart>, Strin
 pub(crate) enum Stmt {
     Decl(VarDecl),
     Assign(String, String, Expr),
+    AssignMember(Box<Expr>, String, String, Expr),
+    AssignIndex(Box<Expr>, Box<Expr>, String, Expr),
     Require(String),
     Expr(Expr),
     Block(Vec<Stmt>),
@@ -156,7 +179,107 @@ pub(crate) struct Fun {
     pub(crate) body: Vec<Stmt>,
 }
 #[derive(Clone, Debug)]
+pub(crate) struct StructField {
+    pub(crate) ty: Ty,
+    pub(crate) name: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StructDef {
+    pub(crate) name: String,
+    pub(crate) fields: Vec<StructField>,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) enum Top {
     Fun(Fun),
     Stmt(Stmt),
+    Struct(StructDef),
+}
+
+fn collect_retyped_assignments(
+    stmts: &[Stmt],
+    globals: &HashSet<String>,
+    scopes: &mut Vec<HashSet<String>>,
+    names: &mut HashSet<String>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Decl(decl) => {
+                if let Some(scope) = scopes.last_mut() {
+                    scope.insert(decl.name.clone());
+                }
+            }
+            Stmt::Require(path) => {
+                if let Some(scope) = scopes.last_mut() {
+                    scope.insert(module_basename(path));
+                }
+            }
+            Stmt::Assign(name, op, Expr::Cast(_, _)) if op == "=" => {
+                if globals.contains(name) && !scopes.iter().rev().any(|scope| scope.contains(name)) {
+                    names.insert(name.clone());
+                }
+            }
+            Stmt::Block(body) | Stmt::While(_, body) => {
+                scopes.push(HashSet::new());
+                collect_retyped_assignments(body, globals, scopes, names);
+                scopes.pop();
+            }
+            Stmt::If(_, yes, no) => {
+                scopes.push(HashSet::new());
+                collect_retyped_assignments(yes, globals, scopes, names);
+                scopes.pop();
+                scopes.push(HashSet::new());
+                collect_retyped_assignments(no, globals, scopes, names);
+                scopes.pop();
+            }
+            Stmt::For {
+                variable, body, ..
+            } => {
+                scopes.push(HashSet::from([variable.clone()]));
+                collect_retyped_assignments(body, globals, scopes, names);
+                scopes.pop();
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(crate) fn retyped_global_names(program: &[Top]) -> HashSet<String> {
+    let globals: HashSet<String> = program
+        .iter()
+        .filter_map(|top| match top {
+            Top::Stmt(Stmt::Decl(decl)) => Some(decl.name.clone()),
+            Top::Stmt(Stmt::Require(path)) => Some(module_basename(path)),
+            Top::Stmt(Stmt::Assign(name, op, Expr::Call(call, args)))
+                if op == "="
+                    && call == "require"
+                    && matches!(args.as_slice(), [Expr::Str(_)]) =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let mut names = HashSet::new();
+    for top in program {
+        match top {
+            Top::Fun(function) => {
+                let mut scopes = vec![function
+                    .params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect()];
+                collect_retyped_assignments(&function.body, &globals, &mut scopes, &mut names);
+            }
+            Top::Stmt(stmt) => collect_retyped_assignments(
+                std::slice::from_ref(stmt),
+                &globals,
+                &mut Vec::new(),
+                &mut names,
+            ),
+            Top::Struct(_) => {}
+        }
+    }
+    names
 }

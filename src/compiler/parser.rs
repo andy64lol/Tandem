@@ -1,4 +1,4 @@
-use crate::compiler::ast::{Expr, Fun, Param, Stmt, Top, Ty, VarDecl};
+use crate::compiler::ast::{Expr, Fun, Param, Stmt, StructDef, StructField, Top, Ty, VarDecl};
 use crate::compiler::lexer::{Tok, Token};
 
 struct Parser {
@@ -56,7 +56,31 @@ impl Parser {
     }
     fn ty(&mut self) -> Result<Ty, String> {
         let n = self.expect_ident()?;
-        Ty::parse(&n).ok_or_else(|| self.err(format!("unknown type '{n}'")))
+        if n == "list" {
+            let element = self.ty()?;
+            if element == Ty::Void {
+                return Err(self.err("lists cannot contain values of type 'void'".into()));
+            }
+            return Ok(Ty::List(Box::new(element)));
+        }
+        Ok(Ty::parse(&n).unwrap_or_else(|| Ty::Struct(n)))
+    }
+    fn looks_like_declaration(&self) -> bool {
+        fn skip_type(tokens: &[Token], index: usize) -> Option<usize> {
+            let Tok::Ident(name) = &tokens.get(index)?.kind else {
+                return None;
+            };
+            if name == "list" {
+                skip_type(tokens, index + 1)
+            } else {
+                Some(index + 1)
+            }
+        }
+        let Some(index) = skip_type(&self.t, self.i) else {
+            return false;
+        };
+        matches!(self.t.get(index).map(|token| &token.kind), Some(Tok::Ident(_)))
+            && self.t.get(index + 1).map(|token| &token.kind) == Some(&Tok::Sym("=".into()))
     }
     fn eat_modifier(&mut self, modifier: &str) -> bool {
         if self.eat_kw(modifier) {
@@ -80,7 +104,9 @@ impl Parser {
     fn program(&mut self) -> Result<Vec<Top>, String> {
         let mut v = vec![];
         while !matches!(self.cur().kind, Tok::Eof) {
-            if self.eat_kw("fn") {
+            if self.eat_kw("struct") {
+                v.push(Top::Struct(self.struct_def()?));
+            } else if self.eat_kw("fn") {
                 v.push(Top::Fun(self.function()?));
             } else {
                 v.push(Top::Stmt(self.stmt()?));
@@ -125,6 +151,22 @@ impl Parser {
             ret,
             body,
         })
+    }
+    fn struct_def(&mut self) -> Result<StructDef, String> {
+        let name = self.expect_ident()?;
+        self.expect_sym("{")?;
+        let mut fields = Vec::new();
+        while !self.sym("}") && !matches!(self.cur().kind, Tok::Eof) {
+            let ty = self.ty()?;
+            let field_name = self.expect_ident()?;
+            self.expect_sym(";")?;
+            fields.push(StructField {
+                ty,
+                name: field_name,
+            });
+        }
+        self.expect_sym("}")?;
+        Ok(StructDef { name, fields })
     }
     fn block(&mut self) -> Result<Vec<Stmt>, String> {
         self.expect_sym("{")?;
@@ -210,29 +252,29 @@ impl Parser {
             self.expect_sym(";")?;
             return Ok(Stmt::Return(e));
         }
-        if let Tok::Ident(ref s) = self.cur().kind {
-            if let Some(ty) = Ty::parse(s) {
-                self.bump();
-                return self.declaration_after_type(ty, false, false);
-            }
-        }
-        if let Tok::Ident(name) = self.cur().kind.clone() {
-            if self.t.get(self.i + 1).map(|x| &x.kind) == Some(&Tok::Sym("=".into()))
-                || ["+=", "-=", "*=", "/="].iter().any(|op| {
-                    self.t.get(self.i + 1).map(|x| &x.kind) == Some(&Tok::Sym((*op).into()))
-                })
-            {
-                self.bump();
-                let op = match self.bump().kind {
-                    Tok::Sym(s) => s,
-                    _ => unreachable!(),
-                };
-                let e = self.expr(0)?;
-                self.expect_sym(";")?;
-                return Ok(Stmt::Assign(name, op, e));
-            }
+        if self.looks_like_declaration() {
+            let ty = self.ty()?;
+            return self.declaration_after_type(ty, false, false);
         }
         let e = self.expr(0)?;
+        if let Tok::Sym(op) = &self.cur().kind {
+            if ["=", "+=", "-=", "*=", "/="].contains(&op.as_str()) {
+                let op = op.clone();
+                self.bump();
+                let value = self.expr(0)?;
+                self.expect_sym(";")?;
+                return match e {
+                    Expr::Var(name) => Ok(Stmt::Assign(name, op, value)),
+                    Expr::Member(base, name) => {
+                        Ok(Stmt::AssignMember(base, name, op, value))
+                    }
+                    Expr::Index(base, index) => {
+                        Ok(Stmt::AssignIndex(base, index, op, value))
+                    }
+                    _ => Err(self.err("invalid assignment target".into())),
+                };
+            }
+        }
         self.expect_sym(";")?;
         if let Expr::Call(name, args) = &e {
             if name == "require" {
@@ -254,7 +296,11 @@ impl Parser {
         }
         let name = self.expect_ident()?;
         self.expect_sym("=")?;
-        let value = self.expr(0)?;
+        let value = if matches!(ty, Ty::Tuple(_)) && self.sym("(") {
+            self.tuple_literal()?
+        } else {
+            self.expr(0)?
+        };
         self.expect_sym(";")?;
         Ok(Stmt::Decl(VarDecl {
             ty,
@@ -330,6 +376,13 @@ impl Parser {
                     Expr::Var(name) => e = Expr::Call(name, args),
                     _ => return Err(self.err("only named functions can be called".into())),
                 }
+            } else if self.eat_sym("[") {
+                let index = self.expr(0)?;
+                self.expect_sym("]")?;
+                e = Expr::Index(Box::new(e), Box::new(index));
+            } else if self.eat_kw("as") {
+                let ty = self.ty()?;
+                e = Expr::Cast(Box::new(e), ty);
             } else {
                 break;
             }
@@ -359,8 +412,72 @@ impl Parser {
                 self.expect_sym(")")?;
                 Ok(e)
             }
+            Tok::Sym(s) if s == "{" => self.table_fields(),
+            Tok::Sym(s) if s == "[" => self.list_values(),
             _ => Err(format!("expected expression at byte {}", tok.pos)),
         }
+    }
+    fn list_values(&mut self) -> Result<Expr, String> {
+        let mut values = Vec::new();
+        if !self.sym("]") {
+            loop {
+                if self.eat_sym("...") {
+                    values.push(crate::compiler::ast::ListElement::Previous);
+                } else {
+                    values.push(crate::compiler::ast::ListElement::Value(self.expr(1)?));
+                }
+                if !self.eat_sym(",") {
+                    break;
+                }
+                if self.sym("]") {
+                    break;
+                }
+            }
+        }
+        self.expect_sym("]")?;
+        Ok(Expr::List(values))
+    }
+    fn tuple_literal(&mut self) -> Result<Expr, String> {
+        self.expect_sym("(")?;
+        let mut values = Vec::new();
+        if !self.sym(")") {
+            loop {
+                values.push(self.expr(1)?);
+                if !self.eat_sym(",") {
+                    break;
+                }
+                if self.sym(")") {
+                    break;
+                }
+            }
+        }
+        self.expect_sym(")")?;
+        Ok(Expr::Tuple(values))
+    }
+    fn table_fields(&mut self) -> Result<Expr, String> {
+        let mut fields = Vec::new();
+        if !self.sym("}") {
+            loop {
+                let named = matches!(self.cur().kind, Tok::Ident(_))
+                    && self.t.get(self.i + 1).map(|token| &token.kind)
+                        == Some(&Tok::Sym("=".into()));
+                if named {
+                    let name = self.expect_ident()?;
+                    self.expect_sym("=")?;
+                    fields.push((Some(name), self.expr(1)?));
+                } else {
+                    fields.push((None, self.expr(1)?));
+                }
+                if !self.eat_sym(",") {
+                    break;
+                }
+                if self.sym("}") {
+                    break;
+                }
+            }
+        }
+        self.expect_sym("}")?;
+        Ok(Expr::Table(fields))
     }
 }
 

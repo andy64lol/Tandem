@@ -11,7 +11,7 @@ This book is the complete reference for TypeLua 0.1. Chapters are ordered so a f
 
 ## Part II — The language
 
-3. [Types](03-types.md): the five types, literals, and how types erase at runtime.
+3. [Types](03-types.md): primitive, table, dictionary, list, tuple, and struct types.
 4. [Variables](04-variables.md): declarations, the `local` and `const` modifiers, and scope.
 5. [Functions](05-functions.md): declarations, parameters, default values, and return types.
 6. [Statements](06-statements.md): assignment, `if`, `while`, `for`, `return`, and blocks.

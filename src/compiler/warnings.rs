@@ -1,4 +1,6 @@
-use crate::compiler::ast::{module_basename, parse_printf_format, Expr, FormatPart, Fun, Stmt, Top};
+use crate::compiler::ast::{
+    module_basename, parse_printf_format, Expr, FormatPart, Fun, ListElement, Stmt, Top,
+};
 
 #[derive(Clone)]
 struct Binding {
@@ -78,6 +80,7 @@ impl WarnChecker {
             match top {
                 Top::Fun(function) => self.function(function),
                 Top::Stmt(stmt) => self.stmt(stmt, false),
+                Top::Struct(_) => {}
             }
         }
     }
@@ -112,7 +115,11 @@ impl WarnChecker {
         match stmt {
             Stmt::Decl(decl) => {
                 self.expr(&decl.value);
-                if declare {
+                let already_in_scope = self
+                    .scopes
+                    .last()
+                    .is_some_and(|scope| scope.iter().any(|binding| binding.name == decl.name));
+                if declare && !already_in_scope {
                     self.declare(&decl.name, true);
                 }
             }
@@ -121,6 +128,15 @@ impl WarnChecker {
                 if op == "=" && !self.declared(name) && is_require_call(value) {
                     self.declare(name, true);
                 }
+                self.expr(value);
+            }
+            Stmt::AssignMember(base, _, _, value) => {
+                self.expr(base);
+                self.expr(value);
+            }
+            Stmt::AssignIndex(base, index, _, value) => {
+                self.expr(base);
+                self.expr(index);
                 self.expr(value);
             }
             Stmt::Expr(expr) => self.expr(expr),
@@ -171,6 +187,7 @@ impl WarnChecker {
         match expr {
             Expr::Var(name) => self.use_var(name),
             Expr::Unary(_, inner) => self.expr(inner),
+            Expr::Cast(value, _) => self.expr(value),
             Expr::Bin(left, _, right) => {
                 self.expr(left);
                 self.expr(right);
@@ -199,6 +216,27 @@ impl WarnChecker {
                 }
             }
             Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) => {}
+            Expr::Index(base, index) => {
+                self.expr(base);
+                self.expr(index);
+            }
+            Expr::Table(fields) => {
+                for (_, value) in fields {
+                    self.expr(value);
+                }
+            }
+            Expr::List(values) => {
+                for value in values {
+                    if let ListElement::Value(value) = value {
+                        self.expr(value);
+                    }
+                }
+            }
+            Expr::Tuple(values) => {
+                for value in values {
+                    self.expr(value);
+                }
+            }
         }
     }
 }

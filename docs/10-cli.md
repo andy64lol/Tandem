@@ -1,10 +1,32 @@
 # 10. Command line
 
+## LuaRocks packages
+
+TypeLua uses `mlua-pkg` to install pure-Lua LuaRocks packages from their Git repositories. Add a manifest to the project directory:
+
+```toml
+[package]
+name = "my-project"
+version = "0.1.0"
+
+[deps]
+penlight = { git = "https://github.com/lunarmodules/Penlight", tag = "1.14.0" }
+```
+
+Then run:
+
+```sh
+typelua pkg install
+```
+
+At runtime, TypeLua loads installed modules from `mlua-pkg.lock`. For example, `require("pl.path")` resolves Penlight's path module. Package dependencies are pinned in the lockfile. `mlua-pkg` reads rockspecs from Git repositories; it does not look packages up by name on luarocks.org, and C modules are not built as part of installation.
+
 ## Synopsis
 
 ```
 typelua <input.tlua|script.lua> [output.lua or script arguments...]
 typelua --check <input.tlua>
+typelua pkg install [project-dir]
 ```
 
 ## Build

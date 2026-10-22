@@ -44,6 +44,8 @@ cargo run -- --check examples/hello.tlua
 # examples/hello.tlua: OK
 ```
 
+To install dependencies declared in `mlua-pkg.toml`, run `typelua pkg install` from the project directory. See [LuaRocks packages](10-cli.md#luarocks-packages) for the manifest format and runtime behavior.
+
 ## Run ordinary Lua files
 
 Pass a `.lua` file to execute it directly in the embedded runtime. Extra arguments reach the script through Lua's `arg` table:

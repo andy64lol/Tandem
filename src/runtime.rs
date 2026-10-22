@@ -8,18 +8,36 @@ pub fn run_file(path: impl AsRef<Path>) -> Result<(), String> {
 
 pub fn run_file_with_args(path: impl AsRef<Path>, args: &[String]) -> Result<(), String> {
     let path = path.as_ref();
+    let package_root = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    run_file_with_args_in(path, args, package_root)
+}
+
+pub fn run_file_with_args_in(
+    path: impl AsRef<Path>,
+    args: &[String],
+    package_root: impl AsRef<Path>,
+) -> Result<(), String> {
+    let path = path.as_ref();
     let source = fs::read_to_string(path)
         .map_err(|error| format!("cannot read Lua file {}: {error}", path.display()))?;
     let name = path.to_string_lossy();
-    run_source_with_args(&source, &name, args)
+    run_source_with_args(&source, &name, args, package_root.as_ref())
 }
 
 pub fn run_source(source: &str, name: &str) -> Result<(), String> {
-    run_source_with_args(source, name, &[])
+    let path = Path::new(name);
+    let package_root = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    run_source_with_args(source, name, &[], package_root)
 }
 
-fn run_source_with_args(source: &str, name: &str, args: &[String]) -> Result<(), String> {
+fn run_source_with_args(
+    source: &str,
+    name: &str,
+    args: &[String],
+    package_root: &Path,
+) -> Result<(), String> {
     let lua = Lua::new();
+    crate::packages::install_resolver(&lua, package_root)?;
     let lua_args = lua
         .create_table()
         .map_err(|error| format!("cannot prepare Lua arguments: {error}"))?;
