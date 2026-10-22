@@ -1,0 +1,48 @@
+name: Build Linux ARM64
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ARM64 ELF
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Build release executable
+        run: cargo build --locked --release --target aarch64-unknown-linux-gnu
+
+      - name: Verify ELF architecture
+        run: |
+          executable="target/aarch64-unknown-linux-gnu/release/typelua"
+          file "$executable"
+          readelf -h "$executable" | grep -F "AArch64"
+          test -x "$executable"
+
+      - name: Package executable
+        id: package
+        run: |
+          archive="typelua-linux-arm64.tar.gz"
+          tar -czf "$archive" -C target/aarch64-unknown-linux-gnu/release typelua
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: typelua-linux-arm64
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
