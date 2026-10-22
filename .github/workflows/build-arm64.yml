@@ -23,6 +23,9 @@ jobs:
         with:
           targets: aarch64-unknown-linux-gnu
 
+      - name: Install ZIP utility
+        run: sudo apt-get update && sudo apt-get install -y zip
+
       - name: Build release executable
         run: cargo build --locked --release --target aarch64-unknown-linux-gnu
 
@@ -36,13 +39,22 @@ jobs:
       - name: Package executable
         id: package
         run: |
-          archive="typelua-linux-arm64.tar.gz"
-          tar -czf "$archive" -C target/aarch64-unknown-linux-gnu/release typelua
+          archive="typelua-linux-aarch64.zip"
+          executable="target/aarch64-unknown-linux-gnu/release/typelua"
+
+          mkdir package
+          cp "$executable" package/typelua-aarch64
+
+          (
+            cd package
+            zip "../$archive" typelua-aarch64
+          )
+
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: typelua-linux-arm64
+          name: typelua-linux-aarch64
           path: ${{ steps.package.outputs.archive }}
           if-no-files-found: error
