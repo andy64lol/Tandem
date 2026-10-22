@@ -1,0 +1,4 @@
+int name = 0;
+name = "Hello!" as str;
+
+print(name);

@@ -15,7 +15,7 @@ fn report(diagnostics: &[Diagnostic]) {
 
 fn usage() -> ! {
     eprintln!(
-        "Usage: typelua <input.tlua|script.lua> [output.lua or script arguments...]\n       typelua --check <input.tlua>"
+        "Usage: typelua <input.tlua|script.lua> [output.lua or script arguments...]\n       typelua --check <input.tlua>\n       typelua --version"
     );
     process::exit(2)
 }
@@ -24,6 +24,14 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         usage();
+    }
+
+    if args[1] == "--version" || args[1] == "-V" {
+        if args.len() != 2 {
+            usage();
+        }
+        println!("typelua {}", env!("CARGO_PKG_VERSION"));
+        return;
     }
 
     if args[1] == "--check" {

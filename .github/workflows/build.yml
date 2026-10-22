@@ -1,0 +1,60 @@
+name: Build Linux binaries
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} ELF
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            machine: "Advanced Micro Devices X86-64"
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            machine: AArch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release executable
+        run: cargo build --locked --release --target "${{ matrix.target }}"
+
+      - name: Verify ELF architecture
+        run: |
+          executable="target/${{ matrix.target }}/release/typelua"
+          file "$executable"
+          readelf -h "$executable" | grep -F "${{ matrix.machine }}"
+          test -x "$executable"
+
+      - name: Package executable
+        run: |
+          archive="typelua-linux-${{ matrix.arch }}.tar.gz"
+          tar -czf "$archive" -C "target/${{ matrix.target }}/release" typelua
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+        id: package
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: typelua-linux-${{ matrix.arch }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
