@@ -1,9 +1,61 @@
 use std::collections::HashMap;
 
 use crate::compiler::ast::{
-    module_basename, parse_printf_format, retyped_global_names, Expr, FormatPart, ListElement, Stmt,
-    Top, Ty,
+    parse_printf_format, retyped_global_names, Expr, FormatPart, ListElement, Stmt, StmtKind,
+    TableShape, Top, Ty, VarDecl,
 };
+use crate::compiler::stdlib;
+
+fn declaration_type(
+    decl: &VarDecl,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+) -> Ty {
+    match &decl.ty {
+        Ty::Auto => inferred_value_type(&decl.value, scopes, function_returns).unwrap_or(Ty::Any),
+        Ty::Table => {
+            inferred_value_type(&decl.value, scopes, function_returns).unwrap_or(Ty::Table)
+        }
+        Ty::Tuple(None) => {
+            inferred_expr_type(&decl.value, scopes, function_returns).unwrap_or(Ty::Tuple(None))
+        }
+        declared => declared.clone(),
+    }
+}
+
+fn table_shape(
+    expr: &Expr,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+) -> Option<TableShape> {
+    let Expr::Table(fields) = expr else {
+        return None;
+    };
+    let mut shape = TableShape::default();
+    for (name, value) in fields {
+        let mut ty = inferred_expr_type(value, scopes, function_returns).unwrap_or(Ty::Any);
+        if matches!(ty, Ty::TableShape(_)) {
+            ty = Ty::Table;
+        }
+        match name {
+            Some(name) => {
+                shape.named.insert(name.clone(), ty);
+            }
+            None => shape.positional.push(ty),
+        }
+    }
+    Some(shape)
+}
+
+fn inferred_value_type(
+    expr: &Expr,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+) -> Option<Ty> {
+    table_shape(expr, scopes, function_returns)
+        .map(|shape| Ty::TableShape(Box::new(shape)))
+        .or_else(|| inferred_expr_type(expr, scopes, function_returns))
+}
 
 fn lua_str(s: &str) -> String {
     let mut o = String::from("\"");
@@ -59,23 +111,51 @@ fn inferred_expr_type(
                     || left_ty == Ty::Float
                     || left_ty == Ty::Bool)
             {
-                Some(if matches!(op.as_str(), "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||") {
-                    Ty::Bool
-                } else {
-                    left_ty
-                })
+                Some(
+                    if matches!(
+                        op.as_str(),
+                        "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||"
+                    ) {
+                        Ty::Bool
+                    } else {
+                        left_ty
+                    },
+                )
             } else {
                 None
             }
         }
-        Expr::Call(name, _) => function_returns.get(name).cloned(),
-        Expr::Member(_, _) | Expr::MethodCall(_, _, _) => None,
+        Expr::Call(name, args) if name == "require" => match args.as_slice() {
+            [Expr::Str(path)] => Some(Ty::Module(path.clone())),
+            _ => None,
+        },
+        Expr::Call(name, _) => function_returns
+            .get(name)
+            .cloned()
+            .or_else(|| stdlib_return(name)),
+        Expr::Member(base, name) => match inferred_expr_type(base, scopes, function_returns)? {
+            Ty::Map(key_ty, value_ty) if *key_ty == Ty::Str => Some(*value_ty),
+            Ty::TableShape(shape) => Some(shape.named.get(name).cloned().unwrap_or(Ty::Any)),
+            Ty::Module(_) => package_value(base, name),
+            _ => None,
+        },
+        Expr::MethodCall(base, name, _) => package_return(base, name),
         Expr::Index(base, index) => match inferred_expr_type(base, scopes, function_returns)? {
             Ty::List(element_ty) => Some(*element_ty),
+            Ty::Map(_, value_ty) => Some(*value_ty),
             Ty::Tuple(Some(elements)) => match index.as_ref() {
                 Expr::Int(index) if *index > 0 => elements.get(*index as usize - 1).cloned(),
                 _ => Some(Ty::Any),
             },
+            Ty::TableShape(shape) => Some(match index.as_ref() {
+                Expr::Str(key) => shape.named.get(key).cloned().unwrap_or(Ty::Any),
+                Expr::Int(index) if *index > 0 => shape
+                    .positional
+                    .get(*index as usize - 1)
+                    .cloned()
+                    .unwrap_or(Ty::Any),
+                _ => Ty::Any,
+            }),
             Ty::Tuple(None) | Ty::Table | Ty::Dict => Some(Ty::Any),
             _ => None,
         },
@@ -120,6 +200,32 @@ fn merge_types(
     }
 }
 
+fn stdlib_return(name: &str) -> Option<Ty> {
+    stdlib::base_signature(name).map(|signature| signature.ret.clone())
+}
+
+fn package_return(base: &Expr, name: &str) -> Option<Ty> {
+    let Expr::Var(package) = base else {
+        return None;
+    };
+    stdlib::package(package)?
+        .functions
+        .iter()
+        .find(|signature| signature.name == name)
+        .map(|signature| signature.ret.clone())
+}
+
+fn package_value(base: &Expr, name: &str) -> Option<Ty> {
+    let Expr::Var(package) = base else {
+        return None;
+    };
+    stdlib::package(package)?
+        .values
+        .iter()
+        .find(|(member, _)| *member == name)
+        .map(|(_, ty)| ty.clone())
+}
+
 fn is_string_expr(
     expr: &Expr,
     scopes: &[HashMap<String, Ty>],
@@ -132,10 +238,18 @@ fn is_string_expr(
             is_string_expr(left, scopes, function_returns)
                 && is_string_expr(right, scopes, function_returns)
         }
-        Expr::Call(name, _) => function_returns.get(name) == Some(&Ty::Str),
+        Expr::Call(name, _) => {
+            function_returns.get(name) == Some(&Ty::Str) || stdlib_return(name) == Some(Ty::Str)
+        }
         Expr::Cast(_, Ty::Str) => true,
-        Expr::Index(_, _) => {
+        Expr::Member(base, name) => {
             inferred_expr_type(expr, scopes, function_returns) == Some(Ty::Str)
+                || package_value(base, name) == Some(Ty::Str)
+        }
+        Expr::Index(_, _) => inferred_expr_type(expr, scopes, function_returns) == Some(Ty::Str),
+        Expr::MethodCall(base, name, _) => {
+            inferred_expr_type(expr, scopes, function_returns) == Some(Ty::Str)
+                || package_return(base, name) == Some(Ty::Str)
         }
         _ => false,
     }
@@ -199,7 +313,9 @@ fn emit_expr(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        Expr::Member(base, name) => format!("{}.{}", emit_expr(base, scopes, function_returns), name),
+        Expr::Member(base, name) => {
+            format!("{}.{}", emit_expr(base, scopes, function_returns), name)
+        }
         Expr::MethodCall(base, name, args) => format!(
             "{}.{}({})",
             emit_expr(base, scopes, function_returns),
@@ -235,7 +351,8 @@ fn emit_expr(
                 .iter()
                 .map(|value| match value {
                     ListElement::Value(value) => emit_expr(value, scopes, function_returns),
-                    ListElement::Previous => unreachable!("list preservation needs its old binding"),
+                    ListElement::Previous =>
+                        unreachable!("list preservation needs its old binding"),
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -279,7 +396,15 @@ fn emit_list_replacement(
         })
         .collect::<Vec<_>>()
         .join(", ");
-    Some(format!("(function(old) return {{ {elements} }} end)({name})"))
+    Some(format!(
+        "(function(old) return {{ {elements} }} end)({name})"
+    ))
+}
+
+fn annotate_line(out: &mut String, start: usize, line: usize, column: usize) {
+    if let Some(offset) = out[start..].find('\n') {
+        out.insert_str(start + offset, &format!(" -- tlua:{line}:{column}"));
+    }
 }
 
 fn emit_stmts(
@@ -291,17 +416,13 @@ fn emit_stmts(
 ) {
     let pad = "    ".repeat(indent);
     for s in stmts {
-        match s {
-            Stmt::Decl(decl) => {
-                let value = emit_list_replacement(
-                    &decl.name,
-                    &decl.value,
-                    scopes,
-                    function_returns,
-                )
-                .unwrap_or_else(|| emit_expr(&decl.value, scopes, function_returns));
-                let ty = inferred_expr_type(&decl.value, scopes, function_returns)
-                    .unwrap_or_else(|| decl.ty.clone());
+        let start = out.len();
+        match &s.kind {
+            StmtKind::Decl(decl) => {
+                let value =
+                    emit_list_replacement(&decl.name, &decl.value, scopes, function_returns)
+                        .unwrap_or_else(|| emit_expr(&decl.value, scopes, function_returns));
+                let ty = declaration_type(decl, scopes, function_returns);
                 let current_scope = scopes.last_mut().unwrap();
                 if current_scope.contains_key(&decl.name) {
                     out.push_str(&format!("{pad}{} = {value}\n", decl.name));
@@ -310,18 +431,7 @@ fn emit_stmts(
                 }
                 current_scope.insert(decl.name.clone(), ty);
             }
-            Stmt::Require(path) => {
-                let namespace = module_basename(path);
-                out.push_str(&format!(
-                    "{pad}local {namespace} = require({})\n",
-                    lua_str(path)
-                ));
-                scopes
-                    .last_mut()
-                    .unwrap()
-                    .insert(namespace, Ty::Module(path.clone()));
-            }
-            Stmt::Assign(n, op, e) => {
+            StmtKind::Assign(n, op, e) => {
                 let value = emit_list_replacement(n, e, scopes, function_returns)
                     .unwrap_or_else(|| emit_expr(e, scopes, function_returns));
                 if op == "=" {
@@ -334,7 +444,7 @@ fn emit_stmts(
                     out.push_str(&format!("{pad}{n} = {n} {base} {value}\n"));
                 }
             }
-            Stmt::AssignMember(base, name, op, e) => {
+            StmtKind::AssignMember(base, name, op, e) => {
                 let target = format!("{}.{}", emit_expr(base, scopes, function_returns), name);
                 let value = emit_expr(e, scopes, function_returns);
                 if op == "=" {
@@ -344,7 +454,7 @@ fn emit_stmts(
                     out.push_str(&format!("{pad}{target} = {target} {base_op} {value}\n"));
                 }
             }
-            Stmt::AssignIndex(base, index, op, e) => {
+            StmtKind::AssignIndex(base, index, op, e) => {
                 let target = format!(
                     "{}[{}]",
                     emit_expr(base, scopes, function_returns),
@@ -358,18 +468,18 @@ fn emit_stmts(
                     out.push_str(&format!("{pad}{target} = {target} {base_op} {value}\n"));
                 }
             }
-            Stmt::Expr(e) => out.push_str(&format!(
+            StmtKind::Expr(e) => out.push_str(&format!(
                 "{pad}{}\n",
                 emit_expr(e, scopes, function_returns)
             )),
-            Stmt::Block(body) => {
+            StmtKind::Block(body) => {
                 out.push_str(&format!("{pad}do\n"));
                 scopes.push(HashMap::new());
                 emit_stmts(body, out, indent + 1, scopes, function_returns);
                 scopes.pop();
                 out.push_str(&format!("{pad}end\n"));
             }
-            Stmt::If(c, a, b) => {
+            StmtKind::If(c, a, b) => {
                 let before = scopes.clone();
                 out.push_str(&format!(
                     "{pad}if {} then\n",
@@ -390,7 +500,7 @@ fn emit_stmts(
                 merge_types(scopes, &yes_types, &no_types);
                 out.push_str(&format!("{pad}end\n"));
             }
-            Stmt::While(c, b) => {
+            StmtKind::While(c, b) => {
                 let before = scopes.clone();
                 out.push_str(&format!(
                     "{pad}while {} do\n",
@@ -403,7 +513,7 @@ fn emit_stmts(
                 merge_types(scopes, &before, &after);
                 out.push_str(&format!("{pad}end\n"));
             }
-            Stmt::For {
+            StmtKind::For {
                 variable,
                 start,
                 stop,
@@ -426,13 +536,14 @@ fn emit_stmts(
                 merge_types(scopes, &before, &after);
                 out.push_str(&format!("{pad}end\n"));
             }
-            Stmt::Return(e) => out.push_str(&format!(
+            StmtKind::Return(e) => out.push_str(&format!(
                 "{pad}return{}\n",
                 e.as_ref()
                     .map(|x| format!(" {}", emit_expr(x, scopes, function_returns)))
                     .unwrap_or_default()
             )),
         }
+        annotate_line(out, start, s.line, s.column);
     }
 }
 
@@ -462,10 +573,12 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                     export_names.push(function.name.clone());
                 }
             }
-            Top::Stmt(Stmt::Decl(decl)) => {
+            Top::Stmt(Stmt {
+                kind: StmtKind::Decl(decl),
+                ..
+            }) => {
                 if !globals.contains_key(&decl.name) {
-                    let ty = inferred_expr_type(&decl.value, &[], &function_returns)
-                        .unwrap_or_else(|| decl.ty.clone());
+                    let ty = declaration_type(decl, &[], &function_returns);
                     globals.insert(decl.name.clone(), ty);
                 }
                 if (decl.is_local || module_mode) && !local_globals.contains(&decl.name) {
@@ -477,6 +590,7 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
             }
             Top::Stmt(_) => {}
             Top::Struct(_) => {}
+            Top::Import { .. } => {}
         }
     }
 
@@ -508,11 +622,13 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                     .map(|p| p.name.clone())
                     .collect::<Vec<_>>()
                     .join(", ");
+                let start = out.len();
                 if module_mode {
                     out.push_str(&format!("{} = function({params})\n", f.name));
                 } else {
                     out.push_str(&format!("function {}({params})\n", f.name));
                 }
+                annotate_line(&mut out, start, f.line, f.column);
                 let function_scope = f
                     .params
                     .iter()
@@ -534,15 +650,17 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                 scopes = outer_scopes;
                 out.push_str("end\n\n");
             }
-            Top::Stmt(Stmt::Decl(decl)) => {
-                let value = emit_list_replacement(
-                    &decl.name,
-                    &decl.value,
-                    &scopes,
-                    &function_returns,
-                )
-                .unwrap_or_else(|| emit_expr(&decl.value, &scopes, &function_returns));
+            Top::Stmt(Stmt {
+                kind: StmtKind::Decl(decl),
+                line,
+                column,
+            }) => {
+                let start = out.len();
+                let value =
+                    emit_list_replacement(&decl.name, &decl.value, &scopes, &function_returns)
+                        .unwrap_or_else(|| emit_expr(&decl.value, &scopes, &function_returns));
                 out.push_str(&format!("{} = {value}\n", decl.name));
+                annotate_line(&mut out, start, *line, *column);
                 if let Expr::Cast(_, ty) = &decl.value {
                     update_type(&decl.name, ty.clone(), &mut scopes);
                 }
@@ -555,6 +673,7 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                 &function_returns,
             ),
             Top::Struct(_) => {}
+            Top::Import { .. } => {}
         }
     }
     if module_mode {

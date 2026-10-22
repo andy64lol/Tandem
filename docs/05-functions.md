@@ -14,7 +14,7 @@ fn hello() {
 }
 ```
 
-If `-> type` is omitted, the return type defaults to `void`. A non-void function's `return` statement must include a value of the declared type. A void function may use `return;`. The compiler checks return statements but does not ensure every control-flow path returns a value.
+If `-> type` is omitted, the return type defaults to `void`. A non-void function's `return` statement must include a value of the declared type. A void function may use `return;`. Every control-flow path of a non-void function must return a value. The check understands `return`, nested blocks, `if` statements whose branches both return, and `while (true)` loops. A function that can fall through to its end reports `function 'name' must return a value on every path`.
 
 ## Default parameter values
 

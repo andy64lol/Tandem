@@ -1,9 +1,7 @@
 use std::path::Path;
 
 use mlua::Lua;
-use mlua_pkg::{
-    ops, resolvers::VendoredResolver, Config, PkgDir, Project, Registry,
-};
+use mlua_pkg::{ops, resolvers::VendoredResolver, Config, PkgDir, Project, Registry};
 
 /// Install the dependencies declared in `mlua-pkg.toml` under `root`.
 pub fn install(root: impl AsRef<Path>) -> Result<(), String> {

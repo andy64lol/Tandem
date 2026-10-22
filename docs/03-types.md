@@ -8,7 +8,8 @@ Primitive types and collection types are checked at compile time and erased in g
 | `float` | Decimal literals such as `3.5` | `number` |
 | `bool` | `true` or `false` | `boolean` |
 | `str` | Double-quoted strings | `string` |
-| `table` | A Lua table with dynamically typed values | `table` |
+| `table` | A Lua table with dynamically typed keys and values | `table` |
+| `table Key Value` | A typed table whose keys have type `Key` (`str` or `int`) and values have type `Value` | `table` |
 | `dict` | Named, dynamically typed values | `table` |
 | `list Type` | Ordered values that all have the given type | `table` |
 | `tuple` | Ordered values with a fixed length and a fixed type at each position | `table` |
@@ -16,9 +17,25 @@ Primitive types and collection types are checked at compile time and erased in g
 
 There are no implicit conversions. `int` and `float` are distinct static types, even though both use Lua numbers at runtime.
 
+`auto` is not a type of its own: it infers a variable's type from its initializer and locks it. It is valid only in a variable declaration with an initializer. See [Variables](04-variables.md#automatic-type-inference).
+
+A declaration can use the `module` type to bind a required file: `module greetings = require("greetings.tlua");`. The compiler infers the module's exported members from that file. A bare `module` type outside such a declaration is rejected.
+
 Lists use a type after `list`, for example `list int scores = [10, 20, 30];`. List elements must match that type. Lists use square brackets and Lua's one-based indexes. Do not use `int[]`; curly braces are for tables and dictionaries, and parentheses are for tuples.
 
-Use `dict` for named keys, `list Type` for resizable ordered values of one type, and `tuple` for an ordered group whose length and positional types are inferred from its first value. These collections compile to Lua tables. Values read from a generic `table` or `dict`, and values exported by dynamic modules, have no statically known type. They require an explicit `as type` assertion to assign them to a statically typed variable, field, or parameter. List reads retain the list's element type, and tuple reads at a constant index retain that position's type. An assertion does not convert or validate the value at runtime.
+A plain `table` is a generic Lua table whose keys and values are dynamic. A generic table initialized with a table literal keeps the static types of its named fields and positional values for reads through that variable: `table t = { count = 1 }; int n = t.count;` is checked. Assigning a known field or index validates its value type. Reassigning the whole table makes subsequent reads dynamic again. `table Key Value` is a statically typed table: `Key` must be `str` or `int`, and every read or write is checked against `Value`. With `str` keys, literals use named fields and values can be read with both `t.name` and `t["name"]`. With `int` keys, literals are positional and receive keys 1, 2, 3, and so on. Typed tables still compile to ordinary Lua tables.
+
+```tlua
+table str int ages = { alice = 21, bob = 32 };
+int bob = ages.bob;
+ages["carol"] = 17;
+ages.dave = 4;
+
+table int str names = { "zero", "one", "two" };
+str one = names[1];
+```
+
+Use `dict` for named keys, `list Type` for resizable ordered values of one type, and `tuple` for an ordered group whose length and positional types are inferred from its first value. These collections compile to Lua tables. Values read from a generic `table` keep the types of its literal initializer when known; values read from a `dict`, from a generic `table` without a literal shape, and values exported by dynamic modules have no statically known type. Dynamic values require an explicit `as type` assertion to assign them to a statically typed variable, field, or parameter. List reads retain the list's element type, and tuple reads at a constant index retain that position's type. An assertion does not convert or validate the value at runtime.
 
 Structs define named fields and their types:
 

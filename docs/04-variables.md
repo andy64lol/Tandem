@@ -25,6 +25,22 @@ name = "TypeLua"; // now a str
 // name = 1;      // error: name is now a str
 ```
 
+The one exception to the type rule is a module binding: `module greetings = require("greetings.tlua");` and `local greetings = require("greetings.tlua");` infer the module type from `require`. See [Getting started](02-getting-started.md#split-a-program-across-files) for module imports.
+
+### Automatic type inference
+
+The `auto` type infers a variable's type from its initializer and then locks it, so later assignments behave as if the inferred type had been written explicitly:
+
+```tlua
+auto lives = 3;        // inferred as int
+lives += 1;
+// lives = "three" as str; // error: cannot change the type of 'auto' variable 'lives'
+
+auto greeting = "hi " .. "there"; // inferred as str
+```
+
+An `auto` variable cannot be redefined, and the initializer must have a static type. The type cannot be inferred from a dynamic value such as a member of a standard library package, and using `auto` in a parameter, field, or return type is an error; it is only valid in a variable declaration with an initializer.
+
 `as` is a type assertion, not a conversion: a statically known value must already have the asserted type. For a dynamic value read from a generic `table` or `dict`, from a tuple with an unknown index, or from a dynamic module, `as type` explicitly asserts its type. The generated Lua does not validate or convert the value at runtime. If different control-flow paths leave a variable with different types, the compiler treats its type as dynamic until an explicit `as type` assertion is used. A global variable can be retyped at top level; inside a function, use `as` to read a global whose type changes in the program, and retyping the global itself is rejected.
 
 A variable cannot be declared with type `void`.

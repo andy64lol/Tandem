@@ -1,3 +1,4 @@
 /target
 *.lua
+!/examples/lua-helper.lua
 .mlua-pkgs/

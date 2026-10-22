@@ -2,16 +2,16 @@
 
 TypeLua 0.1.1 is a small proof of concept. The language does not currently implement:
 
-- imports or modules for splitting programs across `.tlua` files;
 - classes, inheritance, or generics;
-- static value typing for values read from generic `table` and `dict` collections;
+- fully static typing for `dict` values, and for generic `table` values that were not initialized with a literal;
 - closures or first-class functions;
-- inferred or optional types;
+- optional types;
 - user-defined operators;
-- typings for the Lua standard library;
-- definite-return analysis for non-void functions.
+- static member types for every Lua standard-library function: common members are typed, but the rest remain dynamic.
 
-The implementation has a small parser without error recovery or source maps, and compile errors report byte positions rather than line and column numbers.
+Generic `table` literal shapes are tracked per variable. They are not propagated through aliases, and a function that mutates a global table can invalidate the shape the checker knows at the call site.
+
+The parser recovers at statement boundaries, which can discard part of a malformed construct before reporting later errors. Source maps are statement-level comments rather than a byte-accurate mapping, and Lua tracebacks still use the generated file and line numbers.
 
 The runtime embeds stock Lua 5.4 and adds no game-engine facilities: a host game engine must provide its own update loop and input API.
 

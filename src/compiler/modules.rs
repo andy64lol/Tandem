@@ -4,7 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::compiler::ast::{retyped_global_names, Export, FnSig, ModuleExports, Stmt, Top, Ty};
+use crate::compiler::ast::{
+    retyped_global_names, Export, FnSig, ModuleExports, Stmt, StmtKind, Top, Ty,
+};
 use crate::compiler::{lexer, parser};
 
 pub(crate) struct LoadedModules {
@@ -13,7 +15,7 @@ pub(crate) struct LoadedModules {
 }
 
 struct Loader<'a> {
-    _base: &'a Path,
+    base: &'a Path,
     exports: HashMap<String, ModuleExports>,
     programs: Vec<(String, Vec<Top>)>,
     loading: Vec<String>,
@@ -22,69 +24,136 @@ struct Loader<'a> {
 impl<'a> Loader<'a> {
     fn new(base: &'a Path) -> Self {
         Self {
-            _base: base,
+            base,
             exports: HashMap::new(),
             programs: Vec::new(),
             loading: Vec::new(),
         }
     }
 
-    fn load_requires(&mut self, program: &[Top], dir: &Path) -> Result<(), String> {
+    fn load_requires(&mut self, program: &[Top]) -> Result<(), String> {
         let mut required = Vec::new();
         collect_requires(program, &mut required);
         for id in required {
-            self.load_module(&id, dir)?;
+            self.load_module(&id)?;
         }
         Ok(())
     }
 
-    fn load_module(&mut self, id: &str, dir: &Path) -> Result<(), String> {
+    fn load_module(&mut self, id: &str) -> Result<(), String> {
         if self.exports.contains_key(id) {
             return Ok(());
         }
         if self.loading.iter().any(|loading| loading == id) {
             return Err(format!("cyclic import of module '{id}'"));
         }
-        let file = resolve(dir, id);
-        if !file.is_file() {
-            self.exports.insert(
-                id.to_string(),
-                ModuleExports {
-                    dynamic: true,
-                    ..ModuleExports::default()
-                },
-            );
-            return Ok(());
-        }
-        let source = fs::read_to_string(&file).map_err(|_| {
-            format!(
-                "cannot find module '{id}' (looked for {})",
-                file.display()
-            )
-        })?;
+        let file = match resolve(self.base, id) {
+            Some(ModuleFile::TypeLua(file)) => file,
+            Some(ModuleFile::Lua) => {
+                self.insert_dynamic(id);
+                return Ok(());
+            }
+            None => {
+                if is_explicit_path(id) {
+                    return Err(format!(
+                        "cannot find module '{id}' relative to {}",
+                        self.base.display()
+                    ));
+                }
+                self.insert_dynamic(id);
+                return Ok(());
+            }
+        };
+        let source = fs::read_to_string(&file)
+            .map_err(|error| format!("cannot read module '{id}' ({}) : {error}", file.display()))?;
         let tokens = lexer::lex(&source).map_err(|error| format!("in module '{id}': {error}"))?;
-        let program =
-            parser::parse(tokens).map_err(|error| format!("in module '{id}': {error}"))?;
+        let program = parser::parse(tokens, &source).map_err(|errors| {
+            errors
+                .into_iter()
+                .map(|error| format!("in module '{id}': {error}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })?;
 
         self.loading.push(id.to_string());
-        let module_dir = file.parent().unwrap_or(dir).to_path_buf();
-        let result = self.load_requires(&program, &module_dir);
+        let result = self.load_requires(&program);
         self.loading.pop();
         result?;
 
-        let exports = build_exports(&program).map_err(|error| format!("in module '{id}': {error}"))?;
+        let exports =
+            build_exports(&program).map_err(|error| format!("in module '{id}': {error}"))?;
         self.exports.insert(id.to_string(), exports);
         self.programs.push((id.to_string(), program));
         Ok(())
     }
+
+    fn insert_dynamic(&mut self, id: &str) {
+        self.exports.insert(
+            id.to_string(),
+            ModuleExports {
+                dynamic: true,
+                ..ModuleExports::default()
+            },
+        );
+    }
 }
 
-fn resolve(dir: &Path, id: &str) -> PathBuf {
-    let mut path = dir.join(id);
-    if path.extension().and_then(|extension| extension.to_str()) != Some("tlua") {
-        path.set_extension("tlua");
+enum ModuleFile {
+    TypeLua(PathBuf),
+    Lua,
+}
+
+fn is_explicit_path(id: &str) -> bool {
+    id.ends_with(".tlua")
+        || id.ends_with(".lua")
+        || id.starts_with("./")
+        || id.starts_with("../")
+        || Path::new(id).is_absolute()
+}
+
+fn resolve(dir: &Path, id: &str) -> Option<ModuleFile> {
+    if let Some(stem) = id.strip_suffix(".tlua") {
+        let file = with_suffix(&dir.join(stem), ".tlua");
+        return file.is_file().then_some(ModuleFile::TypeLua(file));
     }
-    path
+    if let Some(stem) = id.strip_suffix(".lua") {
+        let file = with_suffix(&dir.join(stem), ".lua");
+        return file.is_file().then_some(ModuleFile::Lua);
+    }
+    if let Some(file) = resolve_stem(dir, id) {
+        return Some(file);
+    }
+    if !id.contains('/') && id.contains('.') && !id.starts_with('.') {
+        return resolve_stem(dir, &id.replace('.', "/"));
+    }
+    None
+}
+
+fn resolve_stem(dir: &Path, id: &str) -> Option<ModuleFile> {
+    let base = dir.join(id);
+    let tlua = with_suffix(&base, ".tlua");
+    if tlua.is_file() {
+        return Some(ModuleFile::TypeLua(tlua));
+    }
+    let lua = with_suffix(&base, ".lua");
+    if lua.is_file() {
+        return Some(ModuleFile::Lua);
+    }
+    let tlua_init = base.join("init.tlua");
+    if tlua_init.is_file() {
+        return Some(ModuleFile::TypeLua(tlua_init));
+    }
+    let lua_init = base.join("init.lua");
+    if lua_init.is_file() {
+        return Some(ModuleFile::Lua);
+    }
+    None
+}
+
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
 }
 
 fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
@@ -100,7 +169,11 @@ fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
     for top in program {
         match top {
             Top::Fun(function) => {
-                let required = function.params.iter().take_while(|p| p.default.is_none()).count();
+                let required = function
+                    .params
+                    .iter()
+                    .take_while(|p| p.default.is_none())
+                    .count();
                 insert(
                     &mut exports,
                     &function.name,
@@ -108,13 +181,21 @@ fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
                         args: function.params.iter().map(|p| p.ty.clone()).collect(),
                         required,
                         ret: function.ret.clone(),
+                        varargs: false,
                     }),
                 )?;
             }
-            Top::Stmt(Stmt::Decl(decl)) => {
+            Top::Stmt(Stmt {
+                kind: StmtKind::Decl(decl),
+                ..
+            }) => {
                 if let Some(Export::Var(existing)) = exports.items.get(&decl.name) {
                     let compatible = match (&decl.ty, existing) {
                         (Ty::Dict, Ty::Dict) => true,
+                        (
+                            Ty::Map(declared_key, declared_value),
+                            Ty::Map(existing_key, existing_value),
+                        ) => declared_key == existing_key && declared_value == existing_value,
                         (Ty::List(left), Ty::List(right)) => left == right,
                         (Ty::Tuple(_), Ty::Tuple(_)) => true,
                         _ => false,
@@ -149,37 +230,37 @@ fn collect_requires(program: &[Top], out: &mut Vec<String>) {
             Top::Fun(function) => collect_stmt_requires(&function.body, out),
             Top::Stmt(stmt) => collect_stmt_requires(std::slice::from_ref(stmt), out),
             Top::Struct(_) => {}
+            Top::Import { .. } => {}
         }
     }
 }
 
 fn collect_stmt_requires(stmts: &[Stmt], out: &mut Vec<String>) {
     for stmt in stmts {
-        match stmt {
-            Stmt::Decl(decl) => collect_expr_requires(&decl.value, out),
-            Stmt::Assign(_, _, value) => collect_expr_requires(value, out),
-            Stmt::AssignMember(base, _, _, value) => {
+        match &stmt.kind {
+            StmtKind::Decl(decl) => collect_expr_requires(&decl.value, out),
+            StmtKind::Assign(_, _, value) => collect_expr_requires(value, out),
+            StmtKind::AssignMember(base, _, _, value) => {
                 collect_expr_requires(base, out);
                 collect_expr_requires(value, out);
             }
-            Stmt::AssignIndex(base, index, _, value) => {
+            StmtKind::AssignIndex(base, index, _, value) => {
                 collect_expr_requires(base, out);
                 collect_expr_requires(index, out);
                 collect_expr_requires(value, out);
             }
-            Stmt::Require(path) => push_unique(out, path),
-            Stmt::Expr(expr) => collect_expr_requires(expr, out),
-            Stmt::Block(body) => collect_stmt_requires(body, out),
-            Stmt::If(condition, yes, no) => {
+            StmtKind::Expr(expr) => collect_expr_requires(expr, out),
+            StmtKind::Block(body) => collect_stmt_requires(body, out),
+            StmtKind::If(condition, yes, no) => {
                 collect_expr_requires(condition, out);
                 collect_stmt_requires(yes, out);
                 collect_stmt_requires(no, out);
             }
-            Stmt::While(condition, body) => {
+            StmtKind::While(condition, body) => {
                 collect_expr_requires(condition, out);
                 collect_stmt_requires(body, out);
             }
-            Stmt::For {
+            StmtKind::For {
                 start,
                 stop,
                 step,
@@ -191,7 +272,7 @@ fn collect_stmt_requires(stmts: &[Stmt], out: &mut Vec<String>) {
                 collect_expr_requires(step, out);
                 collect_stmt_requires(body, out);
             }
-            Stmt::Return(value) => {
+            StmtKind::Return(value) => {
                 if let Some(value) = value {
                     collect_expr_requires(value, out);
                 }
@@ -259,7 +340,7 @@ fn push_unique(out: &mut Vec<String>, path: &str) {
 
 pub(crate) fn load(program: &[Top], base: &Path) -> Result<LoadedModules, String> {
     let mut loader = Loader::new(base);
-    loader.load_requires(program, base)?;
+    loader.load_requires(program)?;
     Ok(LoadedModules {
         exports: loader.exports,
         programs: loader.programs,

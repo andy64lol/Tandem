@@ -2,13 +2,16 @@ use std::collections::{HashMap, HashSet};
 
 use crate::compiler::ast::{
     module_basename, parse_printf_format, retyped_global_names, Export, Expr, FnSig, FormatPart,
-    ListElement, ModuleExports, Stmt, StructDef, Top, Ty,
+    ListElement, ModuleExports, Stmt, StmtKind, StructDef, TableShape, Top, Ty,
 };
+use crate::compiler::stdlib;
 
 #[derive(Clone)]
 struct Binding {
     ty: Ty,
     mutable: bool,
+    inferred: bool,
+    shape: Option<TableShape>,
 }
 struct Checker {
     scopes: Vec<HashMap<String, Binding>>,
@@ -16,13 +19,16 @@ struct Checker {
     modules: HashMap<String, ModuleExports>,
     structs: HashMap<String, HashMap<String, Ty>>,
     unstable_globals: HashSet<String>,
+    imports: HashSet<String>,
     function_depth: usize,
+    position: Option<(usize, usize)>,
 }
 impl Checker {
     fn new(
         modules: HashMap<String, ModuleExports>,
         structs: HashMap<String, HashMap<String, Ty>>,
         unstable_globals: HashSet<String>,
+        imports: HashSet<String>,
     ) -> Self {
         Self {
             scopes: vec![HashMap::new()],
@@ -30,26 +36,92 @@ impl Checker {
             modules,
             structs,
             unstable_globals,
+            imports,
             function_depth: 0,
+            position: None,
+        }
+    }
+    fn at(&self, message: String) -> String {
+        match self.position {
+            Some((line, column)) => format!("{message} at line {line}, column {column}"),
+            None => message,
         }
     }
     fn module_exports(&self, base: &Expr) -> Result<(&ModuleExports, String), String> {
-        let Expr::Var(namespace) = base else {
-            return Err("module access requires a module variable".into());
-        };
-        let binding = self
-            .lookup(namespace)
-            .ok_or_else(|| format!("unknown variable '{namespace}'"))?;
-        let Ty::Module(id) = binding.ty else {
-            return Err(format!("'{namespace}' is not a module"));
-        };
-        let exports = self
-            .modules
-            .get(&id)
-            .ok_or_else(|| format!("unknown module '{id}'"))?;
-        Ok((exports, namespace.clone()))
+        match base {
+            Expr::Var(namespace) => {
+                let Some(binding) = self.lookup(namespace) else {
+                    if stdlib::package(namespace).is_some() || namespace == "base" {
+                        if self.imports.contains(namespace.as_str()) {
+                            return Err(format!(
+                                "'{namespace}' is a standard library package and cannot be used as a value"
+                            ));
+                        }
+                        return Err(format!(
+                            "Unrecognised package '{namespace}': import it with 'import {namespace};'"
+                        ));
+                    }
+                    return Err(format!("unknown variable '{namespace}'"));
+                };
+                let Ty::Module(id) = binding.ty else {
+                    return Err(format!("'{namespace}' is not a module"));
+                };
+                let exports = self
+                    .modules
+                    .get(&id)
+                    .ok_or_else(|| format!("unknown module '{id}'"))?;
+                Ok((exports, namespace.clone()))
+            }
+            Expr::Call(name, args) if name == "require" => {
+                let [Expr::Str(id)] = args.as_slice() else {
+                    return Err("require expects one string literal argument".into());
+                };
+                let exports = self
+                    .modules
+                    .get(id)
+                    .ok_or_else(|| format!("unknown module '{id}'"))?;
+                Ok((exports, module_basename(id)))
+            }
+            _ => Err("module access requires a module value".into()),
+        }
+    }
+    fn check_signature_call(
+        &self,
+        label: &str,
+        signature: &FnSig,
+        args: &[Expr],
+    ) -> Result<Ty, String> {
+        if args.len() < signature.required
+            || (!signature.varargs && args.len() > signature.args.len())
+        {
+            let expected = if signature.varargs {
+                format!("at least {}", signature.required)
+            } else {
+                format!("{}..{}", signature.required, signature.args.len())
+            };
+            return Err(format!(
+                "'{label}' expects {expected} arguments, got {}",
+                args.len()
+            ));
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let Some(expected) = signature.args.get(index) else {
+                self.expr(arg)?;
+                continue;
+            };
+            let got = self.expr_as(arg, expected)?;
+            if expected != &Ty::Any && &got != expected {
+                return Err(format!(
+                    "argument to '{label}' expects {expected:?}, got {got:?}"
+                ));
+            }
+        }
+        Ok(signature.ret.clone())
     }
     fn member_type(&self, base: &Expr, name: &str) -> Result<Ty, String> {
+        if let Some(shape) = self.table_shape_of(base) {
+            return Ok(shape.named.get(name).cloned().unwrap_or(Ty::Any));
+        }
         match self.expr(base)? {
             Ty::Struct(struct_name) => self
                 .structs
@@ -57,51 +129,50 @@ impl Checker {
                 .and_then(|fields| fields.get(name))
                 .cloned()
                 .ok_or_else(|| format!("struct '{struct_name}' has no field '{name}'")),
+            Ty::Map(key_ty, value_ty) if *key_ty == Ty::Str => Ok(*value_ty),
             Ty::Table | Ty::Dict => Ok(Ty::Any),
             Ty::Module(_) => {
                 let (exports, namespace) = self.module_exports(base)?;
                 if exports.dynamic {
-                    return Ok(Ty::Any);
+                    if let Some(members) = &exports.members {
+                        if !members.contains(name) {
+                            return Err(format!("package '{namespace}' has no member '{name}'"));
+                        }
+                    }
                 }
                 match exports.items.get(name) {
                     Some(Export::Var(ty)) => Ok(ty.clone()),
                     Some(Export::Fn(_)) => {
                         Err(format!("function '{namespace}.{name}' must be called"))
                     }
+                    None if exports.dynamic => Ok(Ty::Any),
                     None => Err(format!("module has no member '{name}'")),
                 }
             }
-            ty => Err(format!("cannot access field '{name}' on value of type {ty:?}")),
+            ty => Err(format!(
+                "cannot access field '{name}' on value of type {ty:?}"
+            )),
         }
     }
     fn method_return(&self, base: &Expr, name: &str, args: &[Expr]) -> Result<Ty, String> {
         let (exports, namespace) = self.module_exports(base)?;
         if exports.dynamic {
-            for arg in args {
-                self.expr(arg)?;
+            if let Some(members) = &exports.members {
+                if !members.contains(name) {
+                    return Err(format!("package '{namespace}' has no member '{name}'"));
+                }
             }
-            return Ok(Ty::Any);
         }
         match exports.items.get(name) {
             Some(Export::Var(_)) => Err(format!("'{namespace}.{name}' is not a function")),
             Some(Export::Fn(signature)) => {
-                if args.len() < signature.required || args.len() > signature.args.len() {
-                    return Err(format!(
-                        "'{namespace}.{name}' expects {}..{} arguments, got {}",
-                        signature.required,
-                        signature.args.len(),
-                        args.len()
-                    ));
+                self.check_signature_call(&format!("{namespace}.{name}"), signature, args)
+            }
+            None if exports.dynamic => {
+                for arg in args {
+                    self.expr(arg)?;
                 }
-                for (arg, ty) in args.iter().zip(&signature.args) {
-                    let got = self.expr(arg)?;
-                    if &got != ty {
-                        return Err(format!(
-                            "argument to '{namespace}.{name}' expects {ty:?}, got {got:?}"
-                        ));
-                    }
-                }
-                Ok(signature.ret.clone())
+                Ok(Ty::Any)
             }
             None => Err(format!("module has no member '{name}'")),
         }
@@ -155,25 +226,96 @@ impl Checker {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(binding) = scope.get_mut(name) {
                 binding.ty = ty;
+                binding.shape = None;
                 return;
             }
         }
         unreachable!("type update requires a declared variable")
     }
+    fn set_shape(&mut self, name: &str, shape: Option<TableShape>) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(binding) = scope.get_mut(name) {
+                binding.shape = if binding.ty == Ty::Table { shape } else { None };
+                return;
+            }
+        }
+    }
+    fn table_shape(&self, value: &Expr) -> Option<TableShape> {
+        let Expr::Table(fields) = value else {
+            return None;
+        };
+        let mut shape = TableShape::default();
+        for (name, value) in fields {
+            let ty = self.expr(value).ok()?;
+            match name {
+                Some(name) => {
+                    shape.named.insert(name.clone(), ty);
+                }
+                None => shape.positional.push(ty),
+            }
+        }
+        Some(shape)
+    }
+    fn table_shape_of(&self, base: &Expr) -> Option<TableShape> {
+        let Expr::Var(name) = base else {
+            return None;
+        };
+        let binding = self.lookup(name)?;
+        if binding.ty == Ty::Table {
+            binding.shape
+        } else {
+            None
+        }
+    }
     fn declare(&mut self, n: &str, t: Ty, mutable: bool) -> Result<(), String> {
+        self.declare_with(n, t, mutable, false)
+    }
+    fn declare_inferred(&mut self, n: &str, t: Ty, mutable: bool) -> Result<(), String> {
+        self.declare_with(n, t, mutable, true)
+    }
+    fn declare_with(
+        &mut self,
+        n: &str,
+        t: Ty,
+        mutable: bool,
+        inferred: bool,
+    ) -> Result<(), String> {
         let s = self.scopes.last_mut().unwrap();
         if s.contains_key(n) {
             return Err(format!("duplicate variable '{n}' in this scope"));
         }
-        s.insert(n.into(), Binding { ty: t, mutable });
+        s.insert(
+            n.into(),
+            Binding {
+                ty: t,
+                mutable,
+                inferred,
+                shape: None,
+            },
+        );
         Ok(())
     }
+    fn mark_inferred(&mut self, n: &str) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(binding) = scope.get_mut(n) {
+                binding.inferred = true;
+                return;
+            }
+        }
+        unreachable!("inferred mark requires a declared variable")
+    }
     fn current_binding(&self, name: &str) -> Option<Binding> {
-        self.scopes.last().and_then(|scope| scope.get(name)).cloned()
+        self.scopes
+            .last()
+            .and_then(|scope| scope.get(name))
+            .cloned()
     }
     fn collection_compatible(declared: &Ty, existing: &Ty) -> bool {
         match (declared, existing) {
             (Ty::Dict, Ty::Dict) => true,
+            (Ty::Map(declared_key, declared_value), Ty::Map(existing_key, existing_value)) => {
+                declared_key == existing_key && declared_value == existing_value
+            }
             (Ty::List(declared), Ty::List(existing)) => declared == existing,
             (Ty::Tuple(_), Ty::Tuple(_)) => true,
             _ => false,
@@ -183,9 +325,7 @@ impl Checker {
         match expr {
             Expr::Cast(_, _) => true,
             Expr::Unary(_, value) => Self::contains_cast(value),
-            Expr::Bin(left, _, right) => {
-                Self::contains_cast(left) || Self::contains_cast(right)
-            }
+            Expr::Bin(left, _, right) => Self::contains_cast(left) || Self::contains_cast(right),
             Expr::Call(_, args) => args.iter().any(Self::contains_cast),
             Expr::MethodCall(base, _, args) => {
                 Self::contains_cast(base) || args.iter().any(Self::contains_cast)
@@ -225,6 +365,12 @@ impl Checker {
         let Some(binding) = self.current_binding(&decl.name) else {
             return Err("internal error: missing declaration binding".into());
         };
+        if binding.inferred {
+            return Err(format!(
+                "variable '{}' was declared with 'auto' and cannot be redefined",
+                decl.name
+            ));
+        }
         if !Self::collection_compatible(&decl.ty, &binding.ty) {
             return Err(format!(
                 "variable '{}' is already declared as {:?}; collection redefinition must keep its type",
@@ -330,7 +476,9 @@ impl Checker {
                         .keys()
                         .find(|field| !provided.contains_key(*field))
                     {
-                        return Err(format!("initializer for '{name}' is missing field '{missing}'"));
+                        return Err(format!(
+                            "initializer for '{name}' is missing field '{missing}'"
+                        ));
                     }
                     return Ok(expected.clone());
                 }
@@ -378,6 +526,47 @@ impl Checker {
                 }
                 return Ok(expected.clone());
             }
+            (Ty::Map(key_ty, value_ty), Expr::Table(fields)) => {
+                let mut keys = HashMap::new();
+                for (index, (key, value)) in fields.iter().enumerate() {
+                    match key_ty.as_ref() {
+                        Ty::Str => {
+                            let Some(key) = key else {
+                                return Err("tables with str keys require named fields".into());
+                            };
+                            if keys.insert(key, ()).is_some() {
+                                return Err(format!(
+                                    "table key '{key}' is initialized more than once"
+                                ));
+                            }
+                            let got = self.expr_as(value, value_ty)?;
+                            if &got != value_ty.as_ref() {
+                                return Err(format!(
+                                    "table value for key '{key}' expects {value_ty:?}, got {got:?}"
+                                ));
+                            }
+                        }
+                        Ty::Int => {
+                            if let Some(key) = key {
+                                return Err(format!(
+                                    "tables with int keys do not accept named field '{key}'"
+                                ));
+                            }
+                            let got = self.expr_as(value, value_ty)?;
+                            if &got != value_ty.as_ref() {
+                                return Err(format!(
+                                    "table value {} expects {value_ty:?}, got {got:?}",
+                                    index + 1
+                                ));
+                            }
+                        }
+                        other => {
+                            return Err(format!("table keys must be 'str' or 'int', got {other:?}"))
+                        }
+                    }
+                }
+                return Ok(expected.clone());
+            }
             (Ty::Tuple(expected_types), Expr::Tuple(values)) => {
                 if let Some(expected_types) = expected_types {
                     self.check_tuple_values(values, expected_types)?;
@@ -410,10 +599,28 @@ impl Checker {
             Expr::Float(_) => Ok(Ty::Float),
             Expr::Str(_) => Ok(Ty::Str),
             Expr::Bool(_) => Ok(Ty::Bool),
-            Expr::Var(n) => self
-                .lookup(n)
-                .map(|binding| binding.ty)
-                .ok_or_else(|| format!("unknown variable '{n}'")),
+            Expr::Var(n) => {
+                if let Some(binding) = self.lookup(n) {
+                    return Ok(binding.ty);
+                }
+                if stdlib::package(n).is_some() || n == "base" {
+                    if self.imports.contains(n) {
+                        return Err(format!(
+                            "'{n}' is a standard library package and cannot be used as a value"
+                        ));
+                    }
+                    return Err(format!(
+                        "Unrecognised package '{n}': import it with 'import {n};'"
+                    ));
+                }
+                if stdlib::BASE_VALUES.contains(&n.as_str()) {
+                    if self.imports.contains("base") {
+                        return Ok(stdlib::base_value(n).unwrap_or(Ty::Any));
+                    }
+                    return Err("Unrecognised package 'base': import it with 'import base;'".into());
+                }
+                Err(format!("unknown variable '{n}'"))
+            }
             Expr::Unary(op, x) => {
                 let t = self.expr(x)?;
                 match (op.as_str(), t) {
@@ -432,6 +639,7 @@ impl Checker {
                     }
                     "+" if x == Ty::Str && y == Ty::Str => Ok(Ty::Str),
                     "," if x == Ty::Str && y == Ty::Str => Ok(Ty::Str),
+                    ".." if x == Ty::Str && y == Ty::Str => Ok(Ty::Str),
                     "==" | "!=" if x == y && x != Ty::Void => Ok(Ty::Bool),
                     "<" | ">" | "<=" | ">="
                         if x == y && (x == Ty::Int || x == Ty::Float || x == Ty::Str) =>
@@ -458,10 +666,25 @@ impl Checker {
             Expr::Index(base, index) => {
                 let base_ty = self.expr(base)?;
                 let index_ty = self.expr(index)?;
+                if let Some(shape) = self.table_shape_of(base) {
+                    match (index.as_ref(), &index_ty) {
+                        (Expr::Str(key), Ty::Str) => {
+                            return Ok(shape.named.get(key).cloned().unwrap_or(Ty::Any));
+                        }
+                        (Expr::Int(index), Ty::Int)
+                            if *index > 0 && (*index as usize) <= shape.positional.len() =>
+                        {
+                            return Ok(shape.positional[*index as usize - 1].clone());
+                        }
+                        _ => {}
+                    }
+                }
                 match base_ty {
                     Ty::Table => {
                         if index_ty != Ty::Int && index_ty != Ty::Str {
-                            return Err(format!("table index must be int or str, got {index_ty:?}"));
+                            return Err(format!(
+                                "table index must be int or str, got {index_ty:?}"
+                            ));
                         }
                         Ok(Ty::Any)
                     }
@@ -470,6 +693,12 @@ impl Checker {
                             return Err(format!("dictionary index must be str, got {index_ty:?}"));
                         }
                         Ok(Ty::Any)
+                    }
+                    Ty::Map(key_ty, value_ty) => {
+                        if index_ty != *key_ty {
+                            return Err(format!("table key expects {key_ty:?}, got {index_ty:?}"));
+                        }
+                        Ok(*value_ty)
                     }
                     Ty::List(element_ty) => {
                         if index_ty != Ty::Int {
@@ -573,33 +802,82 @@ impl Checker {
                     }
                     return Ok(Ty::Void);
                 }
-                let f = self
-                    .funcs
-                    .get(n)
-                    .ok_or_else(|| format!("unknown function '{n}'"))?;
-                if args.len() < f.required || args.len() > f.args.len() {
-                    return Err(format!(
-                        "function '{n}' expects {}..{} arguments, got {}",
-                        f.required,
-                        f.args.len(),
-                        args.len()
-                    ));
-                }
-                for (a, t) in args.iter().zip(&f.args) {
-                    let got = self.expr_as(a, t)?;
-                    if &got != t {
-                        return Err(format!("argument to '{n}' expects {t:?}, got {got:?}"));
+                if let Some(f) = self.funcs.get(n) {
+                    if args.len() < f.required || (!f.varargs && args.len() > f.args.len()) {
+                        return Err(format!(
+                            "function '{n}' expects {}..{} arguments, got {}",
+                            f.required,
+                            f.args.len(),
+                            args.len()
+                        ));
                     }
+                    for (a, t) in args.iter().zip(&f.args) {
+                        let got = self.expr_as(a, t)?;
+                        if &got != t {
+                            return Err(format!("argument to '{n}' expects {t:?}, got {got:?}"));
+                        }
+                    }
+                    return Ok(f.ret.clone());
                 }
-                Ok(f.ret.clone())
+                if stdlib::BASE_FUNCTIONS.contains(&n.as_str()) {
+                    if !self.imports.contains("base") {
+                        return Err(format!(
+                            "Unrecognised package 'base': import it with 'import base;' to use '{n}'"
+                        ));
+                    }
+                    if let Some(signature) = stdlib::base_signature(n) {
+                        let signature = FnSig {
+                            args: signature.args.to_vec(),
+                            required: signature.required,
+                            ret: signature.ret.clone(),
+                            varargs: signature.varargs,
+                        };
+                        return self.check_signature_call(n, &signature, args);
+                    }
+                    for arg in args {
+                        self.expr(arg)?;
+                    }
+                    return Ok(Ty::Any);
+                }
+                Err(format!("unknown function '{n}'"))
             }
         }
     }
     fn stmt(&mut self, s: &Stmt, ret: &Ty) -> Result<(), String> {
-        match s {
-            Stmt::Decl(decl) => {
+        let previous = self.position;
+        self.position = Some((s.line, s.column));
+        let result = self.stmt_inner(s, ret);
+        self.position = previous;
+        result.map_err(|message| self.at(message))
+    }
+    fn stmt_inner(&mut self, s: &Stmt, ret: &Ty) -> Result<(), String> {
+        match &s.kind {
+            StmtKind::Decl(decl) => {
                 if self.current_binding(&decl.name).is_some() {
                     return self.check_redefinition(decl);
+                }
+                if decl.ty == Ty::Auto {
+                    let got = self.expr(&decl.value)?;
+                    if got == Ty::Void {
+                        return Err(format!(
+                            "'auto' variable '{}' cannot have type 'void'",
+                            decl.name
+                        ));
+                    }
+                    if got == Ty::Any {
+                        return Err(format!(
+                            "cannot infer a static type for 'auto' variable '{}'; use an explicit type",
+                            decl.name
+                        ));
+                    }
+                    let shape = if got == Ty::Table {
+                        self.table_shape(&decl.value)
+                    } else {
+                        None
+                    };
+                    self.declare_inferred(&decl.name, got, !decl.is_const)?;
+                    self.set_shape(&decl.name, shape);
+                    return Ok(());
                 }
                 if !decl.is_const
                     && matches!(decl.ty, Ty::Tuple(_))
@@ -622,9 +900,16 @@ impl Checker {
                         decl.name, decl.ty
                     ));
                 }
-                self.declare(&decl.name, got, !decl.is_const)
+                let shape = if decl.ty == Ty::Table {
+                    self.table_shape(&decl.value)
+                } else {
+                    None
+                };
+                self.declare(&decl.name, got, !decl.is_const)?;
+                self.set_shape(&decl.name, shape);
+                Ok(())
             }
-            Stmt::Assign(n, op, e) => {
+            StmtKind::Assign(n, op, e) => {
                 let Some(binding) = self.lookup(n) else {
                     let inferred = self.expr(e)?;
                     if op == "=" {
@@ -653,7 +938,10 @@ impl Checker {
                     return Ok(());
                 }
                 if matches!(binding.ty, Ty::Tuple(_)) && op != "=" {
-                    return Err("tuples can only be changed by whole-tuple or same-type element assignment".into());
+                    return Err(
+                        "tuples can only be changed by whole-tuple or same-type element assignment"
+                            .into(),
+                    );
                 }
                 let retype = if op == "=" {
                     match e {
@@ -663,6 +951,9 @@ impl Checker {
                 } else {
                     None
                 };
+                if binding.inferred && retype.is_some() {
+                    return Err(format!("cannot change the type of 'auto' variable '{n}'"));
+                }
                 let expected = if op == "=" {
                     if let Some(ty) = &retype {
                         ty.clone()
@@ -695,15 +986,12 @@ impl Checker {
                     }
                     self.set_type(n, ty);
                 }
+                if op == "=" {
+                    self.set_shape(n, None);
+                }
                 Ok(())
             }
-            Stmt::Require(path) => {
-                if !self.modules.contains_key(path) {
-                    return Err(format!("unknown module '{path}'"));
-                }
-                self.declare(&module_basename(path), Ty::Module(path.clone()), false)
-            }
-            Stmt::AssignMember(base, name, op, value) => {
+            StmtKind::AssignMember(base, name, op, value) => {
                 let target_ty = self.member_type(base, name)?;
                 if op != "=" && !matches!(target_ty, Ty::Int | Ty::Float | Ty::Any) {
                     return Err(format!("compound assignment {op} requires a numeric field"));
@@ -716,17 +1004,38 @@ impl Checker {
                 }
                 Ok(())
             }
-            Stmt::AssignIndex(base, index, op, value) => {
+            StmtKind::AssignIndex(base, index, op, value) => {
                 let base_ty = self.expr(base)?;
                 let index_ty = self.expr(index)?;
                 let target_ty = match base_ty {
                     Ty::Table => {
                         if index_ty != Ty::Int && index_ty != Ty::Str {
-                            return Err(format!("table index must be int or str, got {index_ty:?}"));
+                            return Err(format!(
+                                "table index must be int or str, got {index_ty:?}"
+                            ));
                         }
                         let got = self.expr(value)?;
                         if got == Ty::Void {
                             return Err("table values cannot have type 'void'".into());
+                        }
+                        if let Some(shape) = self.table_shape_of(base) {
+                            let expected = match (index.as_ref(), &index_ty) {
+                                (Expr::Str(key), Ty::Str) => shape.named.get(key),
+                                (Expr::Int(index), Ty::Int)
+                                    if *index > 0
+                                        && (*index as usize) <= shape.positional.len() =>
+                                {
+                                    shape.positional.get(*index as usize - 1)
+                                }
+                                _ => None,
+                            };
+                            if let Some(expected) = expected {
+                                if &got != expected {
+                                    return Err(format!(
+                                        "assignment to table value expects {expected:?}, got {got:?}"
+                                    ));
+                                }
+                            }
                         }
                         return Ok(());
                     }
@@ -739,6 +1048,12 @@ impl Checker {
                             return Err("dictionary values cannot have type 'void'".into());
                         }
                         return Ok(());
+                    }
+                    Ty::Map(key_ty, value_ty) => {
+                        if index_ty != *key_ty {
+                            return Err(format!("table key expects {key_ty:?}, got {index_ty:?}"));
+                        }
+                        *value_ty
                     }
                     Ty::List(_) => {
                         return Err("list indexes cannot be assigned; replace the whole list and use '...' to keep values".into());
@@ -771,7 +1086,9 @@ impl Checker {
                     ty => return Err(format!("cannot index value of type {ty:?}")),
                 };
                 if op != "=" && !matches!(target_ty, Ty::Int | Ty::Float) {
-                    return Err(format!("compound assignment {op} requires a numeric target"));
+                    return Err(format!(
+                        "compound assignment {op} requires a numeric target"
+                    ));
                 }
                 let got = self.expr_as(value, &target_ty)?;
                 if got != target_ty {
@@ -781,11 +1098,11 @@ impl Checker {
                 }
                 Ok(())
             }
-            Stmt::Expr(e) => {
+            StmtKind::Expr(e) => {
                 self.expr(e)?;
                 Ok(())
             }
-            Stmt::Block(body) => {
+            StmtKind::Block(body) => {
                 self.push();
                 for stmt in body {
                     self.stmt(stmt, ret)?;
@@ -793,7 +1110,7 @@ impl Checker {
                 self.pop();
                 Ok(())
             }
-            Stmt::If(c, a, b) => {
+            StmtKind::If(c, a, b) => {
                 if self.expr(c)? != Ty::Bool {
                     return Err("if condition must be bool".into());
                 }
@@ -814,7 +1131,7 @@ impl Checker {
                 self.merge_types(&yes_types, &no_types);
                 Ok(())
             }
-            Stmt::While(c, b) => {
+            StmtKind::While(c, b) => {
                 if self.expr(c)? != Ty::Bool {
                     return Err("while condition must be bool".into());
                 }
@@ -831,7 +1148,7 @@ impl Checker {
                 }
                 Ok(())
             }
-            Stmt::For {
+            StmtKind::For {
                 variable,
                 start,
                 stop,
@@ -854,7 +1171,7 @@ impl Checker {
                 self.merge_types(&before, &after);
                 Ok(())
             }
-            Stmt::Return(e) => match (e, ret) {
+            StmtKind::Return(e) => match (e, ret) {
                 (None, Ty::Void) => Ok(()),
                 (Some(x), r) if self.expr_as(x, r)? == *r => Ok(()),
                 (None, _) => Err("return value required".into()),
@@ -875,19 +1192,25 @@ fn collect_structs(program: &[Top]) -> Result<HashMap<String, HashMap<String, Ty
         for field in &definition.fields {
             if field.ty == Ty::Void {
                 return Err(format!(
-                    "field '{}.{}' cannot have type 'void'",
-                    definition.name, field.name
+                    "field '{}.{}' cannot have type 'void' at line {}, column {}",
+                    definition.name, field.name, definition.line, definition.column
                 ));
             }
-            if fields.insert(field.name.clone(), field.ty.clone()).is_some() {
+            if fields
+                .insert(field.name.clone(), field.ty.clone())
+                .is_some()
+            {
                 return Err(format!(
-                    "duplicate field '{}.{}'",
-                    definition.name, field.name
+                    "duplicate field '{}.{}' at line {}, column {}",
+                    definition.name, field.name, definition.line, definition.column
                 ));
             }
         }
         if structs.insert(definition.name.clone(), fields).is_some() {
-            return Err(format!("duplicate struct '{}'", definition.name));
+            return Err(format!(
+                "duplicate struct '{}' at line {}, column {}",
+                definition.name, definition.line, definition.column
+            ));
         }
     }
     for fields in structs.values() {
@@ -902,6 +1225,21 @@ fn validate_type(ty: &Ty, structs: &HashMap<String, HashMap<String, Ty>>) -> Res
     match ty {
         Ty::Struct(name) if !structs.contains_key(name) => {
             Err(format!("unknown struct type '{name}'"))
+        }
+        Ty::Module(path) if path.is_empty() => {
+            Err("'module' is only valid in a declaration initialized from require(\"path\")".into())
+        }
+        Ty::Auto => {
+            Err("'auto' is only valid in a variable declaration with an initializer".into())
+        }
+        Ty::Map(key, value) => {
+            if !matches!(key.as_ref(), Ty::Str | Ty::Int) {
+                return Err("table keys must be 'str' or 'int'".into());
+            }
+            if value.as_ref() == &Ty::Void {
+                return Err("table values cannot have type 'void'".into());
+            }
+            validate_type(value, structs)
         }
         Ty::List(element) => validate_type(element, structs),
         Ty::Tuple(Some(elements)) => {
@@ -923,16 +1261,28 @@ fn validate_program_types(
         structs: &HashMap<String, HashMap<String, Ty>>,
     ) -> Result<(), String> {
         for statement in statements {
-            match statement {
-                Stmt::Decl(decl) => validate_type(&decl.ty, structs)?,
-                Stmt::Block(body) | Stmt::While(_, body) => validate_stmts(body, structs)?,
-                Stmt::If(_, yes, no) => {
-                    validate_stmts(yes, structs)?;
-                    validate_stmts(no, structs)?;
+            let result = match &statement.kind {
+                StmtKind::Decl(decl) => {
+                    if decl.ty == Ty::Auto {
+                        Ok(())
+                    } else {
+                        validate_type(&decl.ty, structs)
+                    }
                 }
-                Stmt::For { body, .. } => validate_stmts(body, structs)?,
-                _ => {}
-            }
+                StmtKind::Block(body) | StmtKind::While(_, body) => validate_stmts(body, structs),
+                StmtKind::If(_, yes, no) => {
+                    validate_stmts(yes, structs)?;
+                    validate_stmts(no, structs)
+                }
+                StmtKind::For { body, .. } => validate_stmts(body, structs),
+                _ => Ok(()),
+            };
+            result.map_err(|message| {
+                format!(
+                    "{message} at line {}, column {}",
+                    statement.line, statement.column
+                )
+            })?;
         }
         Ok(())
     }
@@ -940,30 +1290,81 @@ fn validate_program_types(
     for top in program {
         match top {
             Top::Fun(function) => {
-                validate_type(&function.ret, structs)?;
-                for param in &function.params {
-                    validate_type(&param.ty, structs)?;
-                }
-                validate_stmts(&function.body, structs)?;
+                let result = (|| {
+                    validate_type(&function.ret, structs)?;
+                    for param in &function.params {
+                        validate_type(&param.ty, structs)?;
+                    }
+                    validate_stmts(&function.body, structs)
+                })();
+                result.map_err(|message| {
+                    format!(
+                        "{message} at line {}, column {}",
+                        function.line, function.column
+                    )
+                })?;
             }
             Top::Stmt(statement) => validate_stmts(std::slice::from_ref(statement), structs)?,
             Top::Struct(StructDef { .. }) => {}
+            Top::Import { .. } => {}
         }
     }
     Ok(())
 }
 
-pub(crate) fn check(program: &[Top], modules: &HashMap<String, ModuleExports>) -> Result<(), String> {
+fn stmt_returns(statement: &Stmt) -> bool {
+    match &statement.kind {
+        StmtKind::Return(_) => true,
+        StmtKind::Block(body) => block_returns(body),
+        StmtKind::If(_, yes, no) => block_returns(yes) && block_returns(no),
+        StmtKind::While(Expr::Bool(true), _) => true,
+        _ => false,
+    }
+}
+
+fn block_returns(statements: &[Stmt]) -> bool {
+    statements.iter().any(stmt_returns)
+}
+
+fn collect_imports(program: &[Top]) -> Result<HashSet<String>, String> {
+    let mut imports = HashSet::new();
+    for top in program {
+        let Top::Import {
+            packages,
+            line,
+            column,
+        } = top
+        else {
+            continue;
+        };
+        for package in packages {
+            if package != "base" && stdlib::package(package).is_none() {
+                return Err(format!(
+                    "Unrecognised package '{package}' at line {line}, column {column}"
+                ));
+            }
+            imports.insert(package.clone());
+        }
+    }
+    Ok(imports)
+}
+
+pub(crate) fn check(
+    program: &[Top],
+    modules: &HashMap<String, ModuleExports>,
+) -> Result<(), String> {
     let structs = collect_structs(program)?;
     validate_program_types(program, &structs)?;
     let unstable_globals = retyped_global_names(program);
-    let mut c = Checker::new(modules.clone(), structs, unstable_globals);
+    let imports = collect_imports(program)?;
+    let mut c = Checker::new(modules.clone(), structs, unstable_globals, imports.clone());
     c.funcs.insert(
         "print".into(),
         FnSig {
             args: vec![],
             required: 0,
             ret: Ty::Void,
+            varargs: true,
         },
     );
     c.funcs.insert(
@@ -972,102 +1373,205 @@ pub(crate) fn check(program: &[Top], modules: &HashMap<String, ModuleExports>) -
             args: vec![Ty::Str],
             required: 1,
             ret: Ty::Void,
+            varargs: false,
         },
     );
-    let mut global_declarations = HashSet::new();
-    for t in program {
-        match t {
-            Top::Stmt(Stmt::Decl(decl)) => {
-                if global_declarations.insert(decl.name.clone()) {
-                    c.declare(&decl.name, decl.ty.clone(), !decl.is_const)?;
-                }
-            }
-            _ => {}
+    for package in &imports {
+        if package == "base" {
+            continue;
         }
+        let definition = stdlib::package(package)
+            .expect("imported stdlib packages are validated by collect_imports");
+        let mut items = HashMap::new();
+        for signature in definition.functions {
+            items.insert(
+                signature.name.to_string(),
+                Export::Fn(FnSig {
+                    args: signature.args.to_vec(),
+                    required: signature.required,
+                    ret: signature.ret.clone(),
+                    varargs: signature.varargs,
+                }),
+            );
+        }
+        for (name, ty) in definition.values {
+            items.insert((*name).to_string(), Export::Var(ty.clone()));
+        }
+        c.modules.insert(
+            package.clone(),
+            ModuleExports {
+                items,
+                dynamic: true,
+                members: Some(
+                    definition
+                        .members
+                        .iter()
+                        .map(|name| (*name).to_string())
+                        .collect(),
+                ),
+            },
+        );
+        c.declare(package, Ty::Module(package.clone()), false)?;
     }
-    for t in program {
-        if let Top::Fun(f) = t {
-            if c.funcs.contains_key(&f.name) {
+    let result = (|| -> Result<(), String> {
+        let mut global_declarations = HashSet::new();
+        for t in program {
+            match t {
+                Top::Stmt(Stmt {
+                    kind: StmtKind::Decl(decl),
+                    line,
+                    column,
+                }) => {
+                    c.position = Some((*line, *column));
+                    if global_declarations.insert(decl.name.clone()) {
+                        if c.imports.contains(&decl.name) {
+                            return Err(format!(
+                                "cannot declare variable '{}': '{}' is an imported package",
+                                decl.name, decl.name
+                            ));
+                        }
+                        let declared = if decl.ty == Ty::Auto {
+                            Ty::Any
+                        } else {
+                            decl.ty.clone()
+                        };
+                        c.declare(&decl.name, declared, !decl.is_const)?;
+                        if decl.ty == Ty::Auto {
+                            c.mark_inferred(&decl.name);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for t in program {
+            if let Top::Fun(f) = t {
+                if c.funcs.contains_key(&f.name) {
+                    return Err(format!(
+                        "function '{}' is already defined or reserved",
+                        f.name
+                    ));
+                }
+                let required = f.params.iter().take_while(|p| p.default.is_none()).count();
+                c.funcs.insert(
+                    f.name.clone(),
+                    FnSig {
+                        args: f.params.iter().map(|p| p.ty.clone()).collect(),
+                        required,
+                        ret: f.ret.clone(),
+                        varargs: false,
+                    },
+                );
+            }
+        }
+        let mut checked_globals = HashSet::new();
+        for t in program {
+            match t {
+                Top::Stmt(Stmt {
+                    kind: StmtKind::Decl(decl),
+                    line,
+                    column,
+                }) => {
+                    c.position = Some((*line, *column));
+                    if checked_globals.insert(decl.name.clone()) {
+                        if decl.ty == Ty::Auto {
+                            let got = c.expr(&decl.value)?;
+                            if got == Ty::Void {
+                                return Err(format!(
+                                    "'auto' variable '{}' cannot have type 'void'",
+                                    decl.name
+                                ));
+                            }
+                            if got == Ty::Any {
+                                return Err(format!(
+                                "cannot infer a static type for 'auto' variable '{}'; use an explicit type",
+                                decl.name
+                            ));
+                            }
+                            let shape = if got == Ty::Table {
+                                c.table_shape(&decl.value)
+                            } else {
+                                None
+                            };
+                            c.set_type(&decl.name, got);
+                            c.set_shape(&decl.name, shape);
+                            continue;
+                        }
+                        if !decl.is_const
+                            && matches!(decl.ty, Ty::Tuple(_))
+                            && Checker::contains_cast(&decl.value)
+                        {
+                            return Err("'as' inside a tuple requires a const tuple".into());
+                        }
+                        let got = if matches!(decl.ty, Ty::Tuple(None)) {
+                            c.expr(&decl.value)?
+                        } else {
+                            c.expr_as(&decl.value, &decl.ty)?
+                        };
+                        let valid = match (&decl.ty, &got) {
+                            (Ty::Tuple(None), Ty::Tuple(Some(_))) => true,
+                            (declared, got) => declared == got,
+                        };
+                        if !valid {
+                            return Err(format!(
+                                "variable '{}' declared {:?}, initializer is {got:?}",
+                                decl.name, decl.ty
+                            ));
+                        }
+                        let shape = if decl.ty == Ty::Table {
+                            c.table_shape(&decl.value)
+                        } else {
+                            None
+                        };
+                        c.set_type(&decl.name, got);
+                        c.set_shape(&decl.name, shape);
+                    } else {
+                        c.check_redefinition(decl)?;
+                    }
+                }
+                Top::Stmt(s) => c.stmt(s, &Ty::Void)?,
+                Top::Fun(_) => {}
+                Top::Struct(_) => {}
+                Top::Import { .. } => {}
+            }
+        }
+        for t in program {
+            let Top::Fun(f) = t else {
+                continue;
+            };
+            c.position = Some((f.line, f.column));
+            let outer_types = c.type_snapshot();
+            for name in c.unstable_globals.clone() {
+                c.set_type(&name, Ty::Any);
+            }
+            c.function_depth += 1;
+            c.push();
+            for p in &f.params {
+                if let Some(d) = &p.default {
+                    let got = c.expr_as(d, &p.ty)?;
+                    if got != p.ty {
+                        return Err(format!(
+                            "default value for parameter '{}' expects {:?}, got {:?}",
+                            p.name, p.ty, got
+                        ));
+                    }
+                }
+                c.declare(&p.name, p.ty.clone(), true)?;
+            }
+            for s in &f.body {
+                c.stmt(s, &f.ret)?;
+            }
+            if f.ret != Ty::Void && !block_returns(&f.body) {
                 return Err(format!(
-                    "function '{}' is already defined or reserved",
+                    "function '{}' must return a value on every path",
                     f.name
                 ));
             }
-            let required = f.params.iter().take_while(|p| p.default.is_none()).count();
-            c.funcs.insert(
-                f.name.clone(),
-                FnSig {
-                    args: f.params.iter().map(|p| p.ty.clone()).collect(),
-                    required,
-                    ret: f.ret.clone(),
-                },
-            );
+            c.pop();
+            c.function_depth -= 1;
+            c.restore_types(&outer_types);
         }
-    }
-    let mut checked_globals = HashSet::new();
-    for t in program {
-        match t {
-            Top::Stmt(Stmt::Decl(decl)) => {
-                if checked_globals.insert(decl.name.clone()) {
-                    if !decl.is_const
-                        && matches!(decl.ty, Ty::Tuple(_))
-                        && Checker::contains_cast(&decl.value)
-                    {
-                        return Err("'as' inside a tuple requires a const tuple".into());
-                    }
-                    let got = if matches!(decl.ty, Ty::Tuple(None)) {
-                        c.expr(&decl.value)?
-                    } else {
-                        c.expr_as(&decl.value, &decl.ty)?
-                    };
-                    let valid = match (&decl.ty, &got) {
-                        (Ty::Tuple(None), Ty::Tuple(Some(_))) => true,
-                        (declared, got) => declared == got,
-                    };
-                    if !valid {
-                        return Err(format!(
-                            "variable '{}' declared {:?}, initializer is {got:?}",
-                            decl.name, decl.ty
-                        ));
-                    }
-                    c.set_type(&decl.name, got);
-                } else {
-                    c.check_redefinition(decl)?;
-                }
-            }
-            Top::Stmt(s) => c.stmt(s, &Ty::Void)?,
-            Top::Fun(_) => {}
-            Top::Struct(_) => {}
-        }
-    }
-    for t in program {
-        let Top::Fun(f) = t else {
-            continue;
-        };
-        let outer_types = c.type_snapshot();
-        for name in c.unstable_globals.clone() {
-            c.set_type(&name, Ty::Any);
-        }
-        c.function_depth += 1;
-        c.push();
-        for p in &f.params {
-            if let Some(d) = &p.default {
-                let got = c.expr_as(d, &p.ty)?;
-                if got != p.ty {
-                    return Err(format!(
-                        "default value for parameter '{}' expects {:?}, got {:?}",
-                        p.name, p.ty, got
-                    ));
-                }
-            }
-            c.declare(&p.name, p.ty.clone(), true)?;
-        }
-        for s in &f.body {
-            c.stmt(s, &f.ret)?;
-        }
-        c.pop();
-        c.function_depth -= 1;
-        c.restore_types(&outer_types);
-    }
-    Ok(())
+        Ok(())
+    })();
+    result.map_err(|message| c.at(message))
 }

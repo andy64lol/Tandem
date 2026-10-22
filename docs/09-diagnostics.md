@@ -11,7 +11,9 @@ int x = 1
 // error: expected ';'
 ```
 
-The compiler stops at the first error.
+Syntax errors are recoverable. After a malformed statement or declaration the parser skips forward to the next statement boundary, so a single compile can report several syntax errors with their locations. If parsing succeeds, each module is type-checked and the first error in each module is reported.
+
+Every parser, lexer, and type error includes a line and column. Locations use one-based lines and columns.
 
 ## Warnings
 
@@ -32,11 +34,36 @@ The compiler collects every warning in a program and reports them together. `pri
 
 ## Reporting
 
-Each diagnostic is printed with its severity:
+Each diagnostic is printed with its severity, its message, and the source path with the location:
 
 ```
-TypeLua error: expected ';' at byte 10
-TypeLua warning: unused variable 'unused'
+error: expected ';', found 'int' at line 2, column 1
+ --> examples/hello.tlua:2:1
+
+warning: unused variable 'unused'
+ --> examples/hello.tlua
+```
+
+Messages include the kind of token that was found where the compiler expected something else, for example `expected ';', found '}'` or `expected expression, found ';'`. Status messages and diagnostics are colored when the output stream is a terminal.
+
+Type errors use the same form. For example, a missing return reports the function's declaration location:
+
+```
+error: function 'f' must return a value on every path at line 1, column 1
+ --> examples/missing-return.tlua:1:1
 ```
 
 Because warnings block code generation, `typelua` writes no `.lua` file and both `typelua` and `typelua --check` exit with a nonzero status whenever a diagnostic is present. The Rust API returns diagnostics as a `Vec<Diagnostic>`; see [Rust API](11-rust-api.md).
+
+## Source maps
+
+Generated Lua keeps a link back to the TypeLua source. Each generated statement and function signature ends with a Lua comment naming the original line and column:
+
+```lua
+x = 1 -- tlua:1:1
+if (x > 0) then -- tlua:2:1
+    print("yes") -- tlua:3:5
+end
+```
+
+The marker is `-- tlua:<line>:<column>`. Editors and debugging tools can parse it to map a generated Lua line back to the `.tlua` file. Nested statements carry their own markers, so the innermost marker on a line is the most precise location.

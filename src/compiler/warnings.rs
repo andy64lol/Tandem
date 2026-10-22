@@ -1,5 +1,5 @@
 use crate::compiler::ast::{
-    module_basename, parse_printf_format, Expr, FormatPart, Fun, ListElement, Stmt, Top,
+    parse_printf_format, Expr, FormatPart, Fun, ListElement, Stmt, StmtKind, Top,
 };
 
 #[derive(Clone)]
@@ -54,11 +54,14 @@ impl WarnChecker {
             self.warnings
                 .push(format!("variable '{name}' shadows an outer declaration"));
         }
-        self.scopes.last_mut().expect("scope stack empty").push(Binding {
-            name: name.to_owned(),
-            used: false,
-            warn_unused,
-        });
+        self.scopes
+            .last_mut()
+            .expect("scope stack empty")
+            .push(Binding {
+                name: name.to_owned(),
+                used: false,
+                warn_unused,
+            });
     }
 
     fn use_var(&mut self, name: &str) {
@@ -72,7 +75,11 @@ impl WarnChecker {
 
     fn program(&mut self, program: &[Top]) {
         for top in program {
-            if let Top::Stmt(Stmt::Decl(decl)) = top {
+            if let Top::Stmt(Stmt {
+                kind: StmtKind::Decl(decl),
+                ..
+            }) = top
+            {
                 self.declare(&decl.name, false);
             }
         }
@@ -81,6 +88,7 @@ impl WarnChecker {
                 Top::Fun(function) => self.function(function),
                 Top::Stmt(stmt) => self.stmt(stmt, false),
                 Top::Struct(_) => {}
+                Top::Import { .. } => {}
             }
         }
     }
@@ -101,10 +109,11 @@ impl WarnChecker {
         let mut returned = false;
         for statement in stmts {
             if returned {
-                self.warnings.push("unreachable statement after return".into());
+                self.warnings
+                    .push("unreachable statement after return".into());
                 returned = false;
             }
-            if matches!(statement, Stmt::Return(_)) {
+            if matches!(&statement.kind, StmtKind::Return(_)) {
                 returned = true;
             }
             self.stmt(statement, declare);
@@ -112,8 +121,8 @@ impl WarnChecker {
     }
 
     fn stmt(&mut self, stmt: &Stmt, declare: bool) {
-        match stmt {
-            Stmt::Decl(decl) => {
+        match &stmt.kind {
+            StmtKind::Decl(decl) => {
                 self.expr(&decl.value);
                 let already_in_scope = self
                     .scopes
@@ -123,29 +132,28 @@ impl WarnChecker {
                     self.declare(&decl.name, true);
                 }
             }
-            Stmt::Require(path) => self.declare(&module_basename(path), true),
-            Stmt::Assign(name, op, value) => {
+            StmtKind::Assign(name, op, value) => {
                 if op == "=" && !self.declared(name) && is_require_call(value) {
                     self.declare(name, true);
                 }
                 self.expr(value);
             }
-            Stmt::AssignMember(base, _, _, value) => {
+            StmtKind::AssignMember(base, _, _, value) => {
                 self.expr(base);
                 self.expr(value);
             }
-            Stmt::AssignIndex(base, index, _, value) => {
+            StmtKind::AssignIndex(base, index, _, value) => {
                 self.expr(base);
                 self.expr(index);
                 self.expr(value);
             }
-            Stmt::Expr(expr) => self.expr(expr),
-            Stmt::Block(body) => {
+            StmtKind::Expr(expr) => self.expr(expr),
+            StmtKind::Block(body) => {
                 self.push();
                 self.stmts(body, true);
                 self.pop();
             }
-            Stmt::If(condition, yes, no) => {
+            StmtKind::If(condition, yes, no) => {
                 self.expr(condition);
                 self.push();
                 self.stmts(yes, true);
@@ -154,13 +162,13 @@ impl WarnChecker {
                 self.stmts(no, true);
                 self.pop();
             }
-            Stmt::While(condition, body) => {
+            StmtKind::While(condition, body) => {
                 self.expr(condition);
                 self.push();
                 self.stmts(body, true);
                 self.pop();
             }
-            Stmt::For {
+            StmtKind::For {
                 variable,
                 start,
                 stop,
@@ -175,7 +183,7 @@ impl WarnChecker {
                 self.stmts(body, true);
                 self.pop();
             }
-            Stmt::Return(value) => {
+            StmtKind::Return(value) => {
                 if let Some(value) = value {
                     self.expr(value);
                 }

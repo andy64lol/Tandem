@@ -1,11 +1,24 @@
-use crate::compiler::ast::{Expr, Fun, Param, Stmt, StructDef, StructField, Top, Ty, VarDecl};
+use crate::compiler::ast::{
+    line_column, Expr, Fun, Param, Stmt, StmtKind, StructDef, StructField, Top, Ty, VarDecl,
+};
 use crate::compiler::lexer::{Tok, Token};
 
-struct Parser {
+struct Parser<'a> {
     t: Vec<Token>,
     i: usize,
+    source: &'a str,
+    errors: Vec<String>,
 }
-impl Parser {
+fn describe(kind: &Tok) -> String {
+    match kind {
+        Tok::Ident(name) => format!("'{name}'"),
+        Tok::Num(value) => format!("number '{value}'"),
+        Tok::Str(_) => "string".into(),
+        Tok::Sym(symbol) => format!("'{symbol}'"),
+        Tok::Eof => "end of file".into(),
+    }
+}
+impl Parser<'_> {
     fn cur(&self) -> &Token {
         &self.t[self.i]
     }
@@ -42,26 +55,66 @@ impl Parser {
         if self.eat_sym(s) {
             Ok(())
         } else {
-            Err(self.err(format!("expected '{s}'")))
+            Err(self.err(format!(
+                "expected '{s}', found {}",
+                describe(&self.cur().kind)
+            )))
         }
     }
     fn expect_ident(&mut self) -> Result<String, String> {
-        match self.bump().kind {
-            Tok::Ident(s) => Ok(s),
-            _ => Err(self.err("expected identifier".into())),
+        if let Tok::Ident(name) = self.cur().kind.clone() {
+            self.bump();
+            Ok(name)
+        } else {
+            Err(self.err(format!(
+                "expected identifier, found {}",
+                describe(&self.cur().kind)
+            )))
         }
     }
     fn err(&self, msg: String) -> String {
-        format!("{msg} at byte {}", self.cur().pos)
+        self.err_at(self.cur().pos, msg)
+    }
+    fn err_at(&self, pos: usize, msg: String) -> String {
+        let (line, column) = line_column(self.source, pos);
+        format!("{msg} at line {line}, column {column}")
+    }
+    fn make_stmt(&self, pos: usize, kind: StmtKind) -> Stmt {
+        let (line, column) = line_column(self.source, pos);
+        Stmt { line, column, kind }
     }
     fn ty(&mut self) -> Result<Ty, String> {
-        let n = self.expect_ident()?;
+        let token = self.bump();
+        let pos = token.pos;
+        let n = match token.kind {
+            Tok::Ident(name) => name,
+            other => {
+                return Err(self.err_at(
+                    pos,
+                    format!("expected type name, found {}", describe(&other)),
+                ))
+            }
+        };
         if n == "list" {
             let element = self.ty()?;
             if element == Ty::Void {
                 return Err(self.err("lists cannot contain values of type 'void'".into()));
             }
             return Ok(Ty::List(Box::new(element)));
+        }
+        if n == "table" {
+            let keyed = matches!(
+                self.t.get(self.i).map(|token| &token.kind),
+                Some(Tok::Ident(_))
+            ) && matches!(
+                self.t.get(self.i + 1).map(|token| &token.kind),
+                Some(Tok::Ident(_))
+            );
+            if keyed {
+                let key = self.ty()?;
+                let value = self.ty()?;
+                return Ok(Ty::Map(Box::new(key), Box::new(value)));
+            }
         }
         Ok(Ty::parse(&n).unwrap_or_else(|| Ty::Struct(n)))
     }
@@ -71,16 +124,30 @@ impl Parser {
                 return None;
             };
             if name == "list" {
-                skip_type(tokens, index + 1)
-            } else {
-                Some(index + 1)
+                return skip_type(tokens, index + 1);
             }
+            if name == "table"
+                && matches!(
+                    tokens.get(index + 1).map(|token| &token.kind),
+                    Some(Tok::Ident(_))
+                )
+                && matches!(
+                    tokens.get(index + 2).map(|token| &token.kind),
+                    Some(Tok::Ident(_))
+                )
+            {
+                let value = skip_type(tokens, index + 1)?;
+                return skip_type(tokens, value);
+            }
+            Some(index + 1)
         }
         let Some(index) = skip_type(&self.t, self.i) else {
             return false;
         };
-        matches!(self.t.get(index).map(|token| &token.kind), Some(Tok::Ident(_)))
-            && self.t.get(index + 1).map(|token| &token.kind) == Some(&Tok::Sym("=".into()))
+        matches!(
+            self.t.get(index).map(|token| &token.kind),
+            Some(Tok::Ident(_))
+        ) && self.t.get(index + 1).map(|token| &token.kind) == Some(&Tok::Sym("=".into()))
     }
     fn eat_modifier(&mut self, modifier: &str) -> bool {
         if self.eat_kw(modifier) {
@@ -97,24 +164,46 @@ impl Parser {
         }
         parenthesized
     }
-    fn declaration(&mut self, is_local: bool, is_const: bool) -> Result<Stmt, String> {
+    fn declaration(&mut self, is_local: bool, is_const: bool, pos: usize) -> Result<Stmt, String> {
         let ty = self.ty()?;
-        self.declaration_after_type(ty, is_local, is_const)
+        self.declaration_after_type(ty, is_local, is_const, pos)
     }
-    fn program(&mut self) -> Result<Vec<Top>, String> {
+    fn program(&mut self) -> Vec<Top> {
         let mut v = vec![];
         while !matches!(self.cur().kind, Tok::Eof) {
-            if self.eat_kw("struct") {
-                v.push(Top::Struct(self.struct_def()?));
+            let pos = self.cur().pos;
+            let item = if self.eat_kw("import") {
+                (|| {
+                    let mut packages = vec![self.expect_ident()?];
+                    while self.eat_sym(",") {
+                        packages.push(self.expect_ident()?);
+                    }
+                    self.expect_sym(";")?;
+                    let (line, column) = line_column(self.source, pos);
+                    Ok(Top::Import {
+                        packages,
+                        line,
+                        column,
+                    })
+                })()
+            } else if self.eat_kw("struct") {
+                self.struct_def(pos).map(Top::Struct)
             } else if self.eat_kw("fn") {
-                v.push(Top::Fun(self.function()?));
+                self.function(pos).map(Top::Fun)
             } else {
-                v.push(Top::Stmt(self.stmt()?));
+                self.stmt().map(Top::Stmt)
+            };
+            match item {
+                Ok(top) => v.push(top),
+                Err(error) => {
+                    self.errors.push(error);
+                    self.recover(true);
+                }
             }
         }
-        Ok(v)
+        v
     }
-    fn function(&mut self) -> Result<Fun, String> {
+    fn function(&mut self, pos: usize) -> Result<Fun, String> {
         let name = self.expect_ident()?;
         self.expect_sym("(")?;
         let mut params = vec![];
@@ -145,14 +234,17 @@ impl Parser {
             Ty::Void
         };
         let body = self.block()?;
+        let (line, column) = line_column(self.source, pos);
         Ok(Fun {
             name,
+            line,
+            column,
             params,
             ret,
             body,
         })
     }
-    fn struct_def(&mut self) -> Result<StructDef, String> {
+    fn struct_def(&mut self, pos: usize) -> Result<StructDef, String> {
         let name = self.expect_ident()?;
         self.expect_sym("{")?;
         let mut fields = Vec::new();
@@ -166,18 +258,56 @@ impl Parser {
             });
         }
         self.expect_sym("}")?;
-        Ok(StructDef { name, fields })
+        let (line, column) = line_column(self.source, pos);
+        Ok(StructDef {
+            name,
+            line,
+            column,
+            fields,
+        })
     }
     fn block(&mut self) -> Result<Vec<Stmt>, String> {
         self.expect_sym("{")?;
         let mut v = vec![];
         while !self.sym("}") && !matches!(self.cur().kind, Tok::Eof) {
-            v.push(self.stmt()?);
+            match self.stmt() {
+                Ok(statement) => v.push(statement),
+                Err(error) => {
+                    self.errors.push(error);
+                    self.recover(false);
+                }
+            }
         }
         self.expect_sym("}")?;
         Ok(v)
     }
+    fn recover(&mut self, top_level: bool) {
+        while !matches!(self.cur().kind, Tok::Eof) {
+            match &self.cur().kind {
+                Tok::Sym(symbol) if symbol == ";" => {
+                    self.bump();
+                    return;
+                }
+                Tok::Sym(symbol) if symbol == "}" => {
+                    if !top_level {
+                        return;
+                    }
+                    self.bump();
+                    return;
+                }
+                Tok::Ident(_) => return,
+                Tok::Sym(symbol) if symbol == "{" => return,
+                _ => {
+                    self.bump();
+                }
+            }
+        }
+    }
     fn stmt(&mut self) -> Result<Stmt, String> {
+        let pos = self.cur().pos;
+        if self.eat_kw("import") {
+            return Err(self.err("'import' is only allowed at the top level".into()));
+        }
         let mut is_local = false;
         let mut is_const = false;
         loop {
@@ -196,10 +326,14 @@ impl Parser {
             }
         }
         if is_local || is_const {
-            return self.declaration(is_local, is_const);
+            if let Some(decl) = self.inferred_require_declaration(is_local, is_const, pos)? {
+                return Ok(decl);
+            }
+            return self.declaration(is_local, is_const, pos);
         }
         if self.sym("{") {
-            return Ok(Stmt::Block(self.block()?));
+            let body = self.block()?;
+            return Ok(self.make_stmt(pos, StmtKind::Block(body)));
         }
         if self.eat_kw("for") {
             self.expect_sym("(")?;
@@ -217,13 +351,17 @@ impl Parser {
                 (Expr::Int(0), first, Expr::Int(1))
             };
             self.expect_sym(")")?;
-            return Ok(Stmt::For {
-                variable,
-                start,
-                stop,
-                step,
-                body: self.block()?,
-            });
+            let body = self.block()?;
+            return Ok(self.make_stmt(
+                pos,
+                StmtKind::For {
+                    variable,
+                    start,
+                    stop,
+                    step,
+                    body,
+                },
+            ));
         }
         if self.eat_kw("if") {
             self.expect_sym("(")?;
@@ -235,13 +373,14 @@ impl Parser {
             } else {
                 vec![]
             };
-            return Ok(Stmt::If(c, yes, no));
+            return Ok(self.make_stmt(pos, StmtKind::If(c, yes, no)));
         }
         if self.eat_kw("while") {
             self.expect_sym("(")?;
             let c = self.expr(0)?;
             self.expect_sym(")")?;
-            return Ok(Stmt::While(c, self.block()?));
+            let body = self.block()?;
+            return Ok(self.make_stmt(pos, StmtKind::While(c, body)));
         }
         if self.eat_kw("return") {
             let e = if self.sym(";") {
@@ -250,11 +389,11 @@ impl Parser {
                 Some(self.expr(0)?)
             };
             self.expect_sym(";")?;
-            return Ok(Stmt::Return(e));
+            return Ok(self.make_stmt(pos, StmtKind::Return(e)));
         }
         if self.looks_like_declaration() {
             let ty = self.ty()?;
-            return self.declaration_after_type(ty, false, false);
+            return self.declaration_after_type(ty, false, false, pos);
         }
         let e = self.expr(0)?;
         if let Tok::Sym(op) = &self.cur().kind {
@@ -264,51 +403,110 @@ impl Parser {
                 let value = self.expr(0)?;
                 self.expect_sym(";")?;
                 return match e {
-                    Expr::Var(name) => Ok(Stmt::Assign(name, op, value)),
+                    Expr::Var(name) => Ok(self.make_stmt(pos, StmtKind::Assign(name, op, value))),
                     Expr::Member(base, name) => {
-                        Ok(Stmt::AssignMember(base, name, op, value))
+                        Ok(self.make_stmt(pos, StmtKind::AssignMember(base, name, op, value)))
                     }
                     Expr::Index(base, index) => {
-                        Ok(Stmt::AssignIndex(base, index, op, value))
+                        Ok(self.make_stmt(pos, StmtKind::AssignIndex(base, index, op, value)))
                     }
                     _ => Err(self.err("invalid assignment target".into())),
                 };
             }
         }
         self.expect_sym(";")?;
-        if let Expr::Call(name, args) = &e {
-            if name == "require" {
-                if let [Expr::Str(path)] = args.as_slice() {
-                    return Ok(Stmt::Require(path.clone()));
-                }
-            }
+        Ok(self.make_stmt(pos, StmtKind::Expr(e)))
+    }
+    fn inferred_require_declaration(
+        &mut self,
+        is_local: bool,
+        is_const: bool,
+        pos: usize,
+    ) -> Result<Option<Stmt>, String> {
+        let is_ident = matches!(self.cur().kind, Tok::Ident(_));
+        let followed_by_equals =
+            self.t.get(self.i + 1).map(|token| &token.kind) == Some(&Tok::Sym("=".into()));
+        if !is_ident || !followed_by_equals {
+            return Ok(None);
         }
-        Ok(Stmt::Expr(e))
+        let name = self.expect_ident()?;
+        self.expect_sym("=")?;
+        let value = self.expr(0)?;
+        self.expect_sym(";")?;
+        let Expr::Call(call, args) = &value else {
+            return Err(self.err(
+                "a declaration without a type must be initialized from require(\"module\")".into(),
+            ));
+        };
+        let [Expr::Str(path)] = args.as_slice() else {
+            return Err(self.err(
+                "a declaration without a type must be initialized from require(\"module\")".into(),
+            ));
+        };
+        if call != "require" {
+            return Err(self.err(
+                "a declaration without a type must be initialized from require(\"module\")".into(),
+            ));
+        }
+        Ok(Some(self.make_stmt(
+            pos,
+            StmtKind::Decl(VarDecl {
+                ty: Ty::Module(path.clone()),
+                name,
+                value,
+                is_const,
+                is_local,
+            }),
+        )))
     }
     fn declaration_after_type(
         &mut self,
         ty: Ty,
         is_local: bool,
         is_const: bool,
+        pos: usize,
     ) -> Result<Stmt, String> {
         if ty == Ty::Void {
             return Err(self.err("variables cannot have type 'void'".into()));
         }
         let name = self.expect_ident()?;
         self.expect_sym("=")?;
-        let value = if matches!(ty, Ty::Tuple(_)) && self.sym("(") {
+        let value = if matches!(ty, Ty::Tuple(_) | Ty::Auto) && self.sym("(") {
             self.tuple_literal()?
         } else {
             self.expr(0)?
         };
         self.expect_sym(";")?;
-        Ok(Stmt::Decl(VarDecl {
-            ty,
-            name,
-            value,
-            is_const,
-            is_local,
-        }))
+        let ty = if ty == Ty::Module(String::new()) {
+            match &value {
+                Expr::Call(call, args) if call == "require" => match args.as_slice() {
+                    [Expr::Str(path)] => Ty::Module(path.clone()),
+                    _ => {
+                        return Err(self.err(
+                            "a 'module' declaration must be initialized from require(\"path\")"
+                                .into(),
+                        ))
+                    }
+                },
+                _ => {
+                    return Err(self.err(
+                        "a 'module' declaration must be initialized from require(\"path\")".into(),
+                    ))
+                }
+            }
+        } else {
+            ty
+        };
+        Ok(self.make_stmt(
+            pos,
+            StmtKind::Decl(VarDecl {
+                ty,
+                name,
+                value,
+                is_const,
+                is_local,
+            }),
+        ))
     }
     fn prec(op: &str) -> Option<u8> {
         Some(match op {
@@ -317,7 +515,7 @@ impl Parser {
             "&&" => 2,
             "==" | "!=" => 3,
             "<" | ">" | "<=" | ">=" => 4,
-            "+" | "-" => 5,
+            "+" | "-" | ".." => 5,
             "*" | "/" | "%" => 6,
             _ => return None,
         })
@@ -362,6 +560,13 @@ impl Parser {
     fn postfix(&mut self) -> Result<Expr, String> {
         let mut e = self.atom()?;
         loop {
+            if matches!(e, Expr::Var(ref name) if name == "require") {
+                if let Tok::Str(path) = self.cur().kind.clone() {
+                    self.bump();
+                    e = Expr::Call("require".into(), vec![Expr::Str(path)]);
+                    continue;
+                }
+            }
             if self.eat_sym(".") {
                 let name = self.expect_ident()?;
                 if self.sym("(") {
@@ -390,31 +595,53 @@ impl Parser {
         Ok(e)
     }
     fn atom(&mut self) -> Result<Expr, String> {
-        let tok = self.bump();
-        match tok.kind {
+        match self.cur().kind.clone() {
             Tok::Num(n) => {
+                self.bump();
                 if n.contains('.') {
                     Ok(Expr::Float(n.parse().map_err(|_| {
-                        format!("invalid number at byte {}", tok.pos)
+                        self.err_at(self.t[self.i - 1].pos, "invalid number".into())
                     })?))
                 } else {
                     Ok(Expr::Int(n.parse().map_err(|_| {
-                        format!("invalid integer at byte {}", tok.pos)
+                        self.err_at(self.t[self.i - 1].pos, "invalid integer".into())
                     })?))
                 }
             }
-            Tok::Str(s) => Ok(Expr::Str(s)),
-            Tok::Ident(s) if s == "true" => Ok(Expr::Bool(true)),
-            Tok::Ident(s) if s == "false" => Ok(Expr::Bool(false)),
-            Tok::Ident(s) => Ok(Expr::Var(s)),
+            Tok::Str(s) => {
+                self.bump();
+                Ok(Expr::Str(s))
+            }
+            Tok::Ident(s) if s == "true" => {
+                self.bump();
+                Ok(Expr::Bool(true))
+            }
+            Tok::Ident(s) if s == "false" => {
+                self.bump();
+                Ok(Expr::Bool(false))
+            }
+            Tok::Ident(s) => {
+                self.bump();
+                Ok(Expr::Var(s))
+            }
             Tok::Sym(s) if s == "(" => {
+                self.bump();
                 let e = self.expr(0)?;
                 self.expect_sym(")")?;
                 Ok(e)
             }
-            Tok::Sym(s) if s == "{" => self.table_fields(),
-            Tok::Sym(s) if s == "[" => self.list_values(),
-            _ => Err(format!("expected expression at byte {}", tok.pos)),
+            Tok::Sym(s) if s == "{" => {
+                self.bump();
+                self.table_fields()
+            }
+            Tok::Sym(s) if s == "[" => {
+                self.bump();
+                self.list_values()
+            }
+            _ => Err(self.err(format!(
+                "expected expression, found {}",
+                describe(&self.cur().kind)
+            ))),
         }
     }
     fn list_values(&mut self) -> Result<Expr, String> {
@@ -481,7 +708,17 @@ impl Parser {
     }
 }
 
-pub(crate) fn parse(tokens: Vec<Token>) -> Result<Vec<Top>, String> {
-    let mut parser = Parser { t: tokens, i: 0 };
-    parser.program()
+pub(crate) fn parse(tokens: Vec<Token>, source: &str) -> Result<Vec<Top>, Vec<String>> {
+    let mut parser = Parser {
+        t: tokens,
+        i: 0,
+        source,
+        errors: Vec::new(),
+    };
+    let program = parser.program();
+    if parser.errors.is_empty() {
+        Ok(program)
+    } else {
+        Err(parser.errors)
+    }
 }

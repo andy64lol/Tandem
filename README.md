@@ -8,12 +8,15 @@ TypeLua is an experimental proof of concept (version 0.1.1), and is not producti
 
 ## What you can do
 
-- **Write TypeLua:** use C-style declarations, functions, control flow, structs, dictionaries, homogeneous typed lists, fixed-shape tuples, and compile-time checks.
-- **Retype deliberately:** use an explicit `as type` assertion when assigning a new type to a variable.
-- **Compile and inspect:** generate ordinary Lua 5.4 files that you can keep, inspect, or use with Lua tools.
-- **Run Lua programs:** execute generated output or existing `.lua` scripts with the embedded Lua 5.4 runtime; you do not need a separate Lua executable.
+- **Write TypeLua:** use C-style declarations, functions, control flow, structs, dictionaries, homogeneous typed lists, fixed-shape tuples, statically typed key-value tables, and compile-time checks.
+- **Retype deliberately:** use an explicit `as type` assertion when assigning a new type to a variable, or declare with `auto` to infer the type once and then lock it.
+- **Import the standard library:** bring Lua standard library packages into scope with `import string, math;` before using them.
+- **Compile and inspect:** generate ordinary Lua 5.4 files that you can keep, inspect, or use with Lua tools, with `-- tlua:line:column` source-map comments.
+- **Get precise diagnostics:** parser recovery reports multiple syntax errors, and syntax and type errors include line and column locations.
+- **Run Lua programs:** execute generated output or existing `.lua` scripts with the embedded Lua 5.4 runtime; you do not need a separate Lua executable. Optional memory and instruction limits guard against runaway scripts.
 - **Add Lua packages:** install pure-Lua packages from Git repositories using `mlua-pkg` and an `mlua-pkg.toml` manifest.
-- **Embed the runtime:** call TypeLua's Lua execution API from another Rust program.
+- **Split programs across files:** bind compiled `.tlua` modules with `module name = require("path.tlua");`, or `require` ordinary `.lua` modules that are loaded by Lua at runtime.
+- **Embed the runtime:** call TypeLua's Lua execution API from another Rust program, configure resource limits, and install host APIs with a setup callback.
 
 ## Get started
 
@@ -81,7 +84,7 @@ At runtime, `require("pl.path")` can resolve Penlight through the generated `mlu
 
 ## Use Lua from Rust
 
-The library exposes `typelua::runtime::run_file("script.lua")` and `typelua::runtime::run_source(source, "chunk-name")` for running Lua from a Rust host.
+The library exposes `typelua::runtime::run_file("script.lua")` and `typelua::runtime::run_source(source, "chunk-name")` for running Lua from a Rust host. `RuntimeConfig` adds memory and instruction limits, and `run_source_with_setup` lets a host install Lua functions before the chunk runs. See the [Rust API](docs/11-rust-api.md) for details.
 
 ## Documentation
 

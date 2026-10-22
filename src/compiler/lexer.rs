@@ -1,3 +1,5 @@
+use crate::compiler::ast::line_column;
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Tok {
     Ident(String),
@@ -28,6 +30,7 @@ fn long_bracket_open(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
 }
 
 fn skip_long_bracket_comment(
+    src: &str,
     bytes: &[u8],
     start: usize,
     body_start: usize,
@@ -48,7 +51,10 @@ fn skip_long_bracket_comment(
         }
         cursor += 1;
     }
-    Err(format!("unterminated Lua long comment at byte {start}"))
+    let (line, column) = line_column(src, start);
+    Err(format!(
+        "unterminated Lua long comment at line {line}, column {column}"
+    ))
 }
 
 pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
@@ -74,7 +80,10 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
                 i += 1;
             }
             if i + 1 >= b.len() {
-                return Err(format!("unterminated block comment at byte {start}"));
+                let (line, column) = line_column(src, start);
+                return Err(format!(
+                    "unterminated block comment at line {line}, column {column}"
+                ));
             }
             i += 2;
             continue;
@@ -83,7 +92,7 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
             let start = i;
             i += 2;
             if let Some((body_start, level)) = long_bracket_open(b, i) {
-                i = skip_long_bracket_comment(b, start, body_start, level)?;
+                i = skip_long_bracket_comment(src, b, start, body_start, level)?;
             } else {
                 while i < b.len() && b[i] != b'\n' {
                     i += 1;
@@ -117,14 +126,15 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
             });
             continue;
         }
-        if b[i] == b'"' {
+        if b[i] == b'"' || b[i] == b'\'' {
+            let quote = b[i];
             i += 1;
             let mut val = String::new();
             let mut closed = false;
             while i < b.len() {
                 let c = b[i];
                 i += 1;
-                if c == b'"' {
+                if c == quote {
                     closed = true;
                     break;
                 }
@@ -139,15 +149,24 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
                         b'r' => '\r',
                         b't' => '\t',
                         b'"' => '"',
+                        b'\'' => '\'',
                         b'\\' => '\\',
-                        _ => return Err(format!("unknown string escape at byte {}", i - 2)),
+                        _ => {
+                            let (line, column) = line_column(src, i - 2);
+                            return Err(format!(
+                                "unknown string escape at line {line}, column {column}"
+                            ));
+                        }
                     });
                 } else {
                     val.push(c as char);
                 }
             }
             if !closed {
-                return Err(format!("unterminated string at byte {start}"));
+                let (line, column) = line_column(src, start);
+                return Err(format!(
+                    "unterminated string at line {line}, column {column}"
+                ));
             }
             out.push(Token {
                 kind: Tok::Str(val),
@@ -157,7 +176,7 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
         }
         let rest = &src[i..];
         let op = [
-            "...", "==", "!=", "<=", ">=", "->", "&&", "||", "+=", "-=", "*=", "/=",
+            "...", "..", "==", "!=", "<=", ">=", "->", "&&", "||", "+=", "-=", "*=", "/=",
         ]
         .into_iter()
         .find(|op| rest.starts_with(op));
@@ -178,7 +197,10 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
             i += 1;
             continue;
         }
-        return Err(format!("unexpected character {:?} at byte {}", c, i));
+        let (line, column) = line_column(src, i);
+        return Err(format!(
+            "unexpected character {c:?} at line {line}, column {column}"
+        ));
     }
     out.push(Token {
         kind: Tok::Eof,

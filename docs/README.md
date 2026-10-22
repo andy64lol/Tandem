@@ -11,11 +11,11 @@ This book is the complete reference for TypeLua 0.1. Chapters are ordered so a f
 
 ## Part II — The language
 
-3. [Types](03-types.md): primitive, table, dictionary, list, tuple, and struct types.
-4. [Variables](04-variables.md): declarations, the `local` and `const` modifiers, and scope.
+3. [Types](03-types.md): primitive, table, dictionary, list, tuple, struct, and module types.
+4. [Variables](04-variables.md): declarations, the `local` and `const` modifiers, `auto` inference, and scope.
 5. [Functions](05-functions.md): declarations, parameters, default values, and return types.
 6. [Statements](06-statements.md): assignment, `if`, `while`, `for`, `return`, and blocks.
-7. [Expressions](07-expressions.md): operators, precedence, and the built-in `print` and `printf`.
+7. [Expressions](07-expressions.md): operators, precedence, standard library imports, and the built-in `print` and `printf`.
 8. [Comments](08-comments.md): C-style and Lua comment forms.
 
 ## Part III — Tooling

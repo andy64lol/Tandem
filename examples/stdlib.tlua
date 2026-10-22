@@ -1,0 +1,16 @@
+import string, math;
+
+str name = "lua" .. " 5.4";
+auto greeting = "hello, " .. name;
+print(greeting);
+
+auto limit = 3;
+limit += 1;
+print(limit);
+
+str upper = string.upper(name);
+int length = string.len(upper);
+print(upper, length);
+
+float root = math.sqrt(144.0);
+print(root);

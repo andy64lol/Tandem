@@ -10,7 +10,20 @@ position[1] = 5;
 
 const tuple origin = (0, 0, 0);
 
+table str int ages = { alice = 21, bob = 32 };
+ages.carol = 17;
+int bobAge = ages.bob;
+
+table int str names = { "zero", "one" };
+str one = names[1];
+
+table config = { name = "typelua", retries = 2 };
+str configName = config.name;
+int retries = config.retries;
+
 print(player.name, player.age, player.elo);
 print(scores[1], scores[2], scores[3]);
 print(position[1], position[2], position[3]);
 print(origin[1], origin[2], origin[3]);
+print(bobAge, one);
+print(configName, retries);

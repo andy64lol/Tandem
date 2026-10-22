@@ -1,5 +1,23 @@
 use std::collections::{HashMap, HashSet};
 
+pub(crate) fn line_column(source: &str, position: usize) -> (usize, usize) {
+    let position = position.min(source.len());
+    let mut line = 1;
+    let mut column = 1;
+    for (index, character) in source.char_indices() {
+        if index >= position {
+            break;
+        }
+        if character == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Ty {
     Int,
@@ -9,11 +27,20 @@ pub(crate) enum Ty {
     Void,
     Module(String),
     Table,
+    Map(Box<Ty>, Box<Ty>),
     Dict,
     List(Box<Ty>),
     Tuple(Option<Vec<Ty>>),
     Any,
+    Auto,
     Struct(String),
+    TableShape(Box<TableShape>),
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct TableShape {
+    pub(crate) named: HashMap<String, Ty>,
+    pub(crate) positional: Vec<Ty>,
 }
 impl Ty {
     pub(crate) fn parse(s: &str) -> Option<Self> {
@@ -23,9 +50,11 @@ impl Ty {
             "bool" => Some(Self::Bool),
             "str" => Some(Self::Str),
             "void" => Some(Self::Void),
+            "module" => Some(Self::Module(String::new())),
             "table" => Some(Self::Table),
             "dict" => Some(Self::Dict),
             "tuple" => Some(Self::Tuple(None)),
+            "auto" => Some(Self::Auto),
             _ => None,
         }
     }
@@ -61,6 +90,7 @@ pub(crate) struct FnSig {
     pub(crate) args: Vec<Ty>,
     pub(crate) required: usize,
     pub(crate) ret: Ty,
+    pub(crate) varargs: bool,
 }
 
 #[derive(Clone)]
@@ -73,11 +103,15 @@ pub(crate) enum Export {
 pub(crate) struct ModuleExports {
     pub(crate) items: HashMap<String, Export>,
     pub(crate) dynamic: bool,
+    pub(crate) members: Option<HashSet<String>>,
 }
 
 pub(crate) fn module_basename(path: &str) -> String {
     let last = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    last.strip_suffix(".tlua").unwrap_or(last).to_string()
+    last.strip_suffix(".tlua")
+        .or_else(|| last.strip_suffix(".lua"))
+        .unwrap_or(last)
+        .to_string()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -138,12 +172,18 @@ pub(crate) fn parse_printf_format(format: &str) -> Result<Vec<FormatPart>, Strin
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum Stmt {
+pub(crate) struct Stmt {
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+    pub(crate) kind: StmtKind,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum StmtKind {
     Decl(VarDecl),
     Assign(String, String, Expr),
     AssignMember(Box<Expr>, String, String, Expr),
     AssignIndex(Box<Expr>, Box<Expr>, String, Expr),
-    Require(String),
     Expr(Expr),
     Block(Vec<Stmt>),
     If(Expr, Vec<Stmt>, Vec<Stmt>),
@@ -174,6 +214,8 @@ pub(crate) struct Param {
 #[derive(Clone, Debug)]
 pub(crate) struct Fun {
     pub(crate) name: String,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
     pub(crate) params: Vec<Param>,
     pub(crate) ret: Ty,
     pub(crate) body: Vec<Stmt>,
@@ -187,11 +229,18 @@ pub(crate) struct StructField {
 #[derive(Clone, Debug)]
 pub(crate) struct StructDef {
     pub(crate) name: String,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
     pub(crate) fields: Vec<StructField>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) enum Top {
+    Import {
+        packages: Vec<String>,
+        line: usize,
+        column: usize,
+    },
     Fun(Fun),
     Stmt(Stmt),
     Struct(StructDef),
@@ -204,28 +253,24 @@ fn collect_retyped_assignments(
     names: &mut HashSet<String>,
 ) {
     for stmt in stmts {
-        match stmt {
-            Stmt::Decl(decl) => {
+        match &stmt.kind {
+            StmtKind::Decl(decl) => {
                 if let Some(scope) = scopes.last_mut() {
                     scope.insert(decl.name.clone());
                 }
             }
-            Stmt::Require(path) => {
-                if let Some(scope) = scopes.last_mut() {
-                    scope.insert(module_basename(path));
-                }
-            }
-            Stmt::Assign(name, op, Expr::Cast(_, _)) if op == "=" => {
-                if globals.contains(name) && !scopes.iter().rev().any(|scope| scope.contains(name)) {
+            StmtKind::Assign(name, op, Expr::Cast(_, _)) if op == "=" => {
+                if globals.contains(name) && !scopes.iter().rev().any(|scope| scope.contains(name))
+                {
                     names.insert(name.clone());
                 }
             }
-            Stmt::Block(body) | Stmt::While(_, body) => {
+            StmtKind::Block(body) | StmtKind::While(_, body) => {
                 scopes.push(HashSet::new());
                 collect_retyped_assignments(body, globals, scopes, names);
                 scopes.pop();
             }
-            Stmt::If(_, yes, no) => {
+            StmtKind::If(_, yes, no) => {
                 scopes.push(HashSet::new());
                 collect_retyped_assignments(yes, globals, scopes, names);
                 scopes.pop();
@@ -233,9 +278,7 @@ fn collect_retyped_assignments(
                 collect_retyped_assignments(no, globals, scopes, names);
                 scopes.pop();
             }
-            Stmt::For {
-                variable, body, ..
-            } => {
+            StmtKind::For { variable, body, .. } => {
                 scopes.push(HashSet::from([variable.clone()]));
                 collect_retyped_assignments(body, globals, scopes, names);
                 scopes.pop();
@@ -249,13 +292,14 @@ pub(crate) fn retyped_global_names(program: &[Top]) -> HashSet<String> {
     let globals: HashSet<String> = program
         .iter()
         .filter_map(|top| match top {
-            Top::Stmt(Stmt::Decl(decl)) => Some(decl.name.clone()),
-            Top::Stmt(Stmt::Require(path)) => Some(module_basename(path)),
-            Top::Stmt(Stmt::Assign(name, op, Expr::Call(call, args)))
-                if op == "="
-                    && call == "require"
-                    && matches!(args.as_slice(), [Expr::Str(_)]) =>
-            {
+            Top::Stmt(Stmt {
+                kind: StmtKind::Decl(decl),
+                ..
+            }) => Some(decl.name.clone()),
+            Top::Stmt(Stmt {
+                kind: StmtKind::Assign(name, op, Expr::Call(call, args)),
+                ..
+            }) if op == "=" && call == "require" && matches!(args.as_slice(), [Expr::Str(_)]) => {
                 Some(name.clone())
             }
             _ => None,
@@ -279,6 +323,7 @@ pub(crate) fn retyped_global_names(program: &[Top]) -> HashSet<String> {
                 &mut names,
             ),
             Top::Struct(_) => {}
+            Top::Import { .. } => {}
         }
     }
     names
