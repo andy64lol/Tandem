@@ -1,0 +1,37 @@
+class player {
+    str name = "Ada";
+    int health = 100;
+
+    constructor(str name) {
+        self.name = name;
+    }
+
+    fn isAlive() -> bool {
+        return health > 0;
+    }
+
+    fn damage(int amount) {
+        health -= amount;
+    }
+}
+
+class warrior extends player {
+    int strength = 10;
+
+    constructor(str name, int strength) {
+        super(name);
+        self.strength = strength;
+    }
+
+    fn damage(int amount) {
+        super.damage(amount);
+        health -= strength;
+    }
+}
+
+local class Hero = new player("Ada");
+local class Rival = new warrior("Grace", 5);
+
+print(Hero.name, "is alive:", Hero.isAlive());
+Rival.damage(120);
+print(Rival.name, "is alive:", Rival.isAlive());

@@ -70,6 +70,9 @@ pub(crate) enum Expr {
     Unary(String, Box<Expr>),
     Bin(Box<Expr>, String, Box<Expr>),
     Call(String, Vec<Expr>),
+    New(String, Vec<Expr>),
+    SuperCall(Vec<Expr>),
+    SuperMethod(String, Vec<Expr>),
     Member(Box<Expr>, String),
     MethodCall(Box<Expr>, String, Vec<Expr>),
     Index(Box<Expr>, Box<Expr>),
@@ -235,6 +238,26 @@ pub(crate) struct StructDef {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct ClassField {
+    pub(crate) ty: Ty,
+    pub(crate) name: String,
+    pub(crate) default: Expr,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ClassDef {
+    pub(crate) name: String,
+    pub(crate) parent: Option<String>,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+    pub(crate) fields: Vec<ClassField>,
+    pub(crate) constructor: Option<Fun>,
+    pub(crate) methods: Vec<Fun>,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) enum Top {
     Import {
         packages: Vec<String>,
@@ -244,6 +267,7 @@ pub(crate) enum Top {
     Fun(Fun),
     Stmt(Stmt),
     Struct(StructDef),
+    Class(ClassDef),
 }
 
 fn collect_retyped_assignments(
@@ -322,6 +346,16 @@ pub(crate) fn retyped_global_names(program: &[Top]) -> HashSet<String> {
                 &mut Vec::new(),
                 &mut names,
             ),
+            Top::Class(class) => {
+                for method in class.methods.iter().chain(class.constructor.iter()) {
+                    let mut scopes = vec![method
+                        .params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect()];
+                    collect_retyped_assignments(&method.body, &globals, &mut scopes, &mut names);
+                }
+            }
             Top::Struct(_) => {}
             Top::Import { .. } => {}
         }

@@ -81,6 +81,47 @@ fn type_errors_report_line_and_column() {
 }
 
 #[test]
+fn compiles_and_runs_classes() {
+    let dir = temp_dir();
+    let source = dir.join("classes.tlua");
+    fs::write(
+        &source,
+        "class player {\n    int hp = 10;\n    constructor(int hp) { self.hp = hp; }\n    fn alive() -> bool { return self.hp > 0; }\n}\nlocal class Hero = new player(0);\nprint(Hero.alive());\n",
+    )
+    .unwrap();
+
+    let output = run(typelua().arg(&source));
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("false"));
+    let generated = fs::read_to_string(dir.join("classes.lua")).unwrap();
+    assert!(generated.contains("function player:alive()"));
+    assert!(generated.contains("Hero:alive()"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn compiles_and_runs_inheritance() {
+    let dir = temp_dir();
+    let source = dir.join("inheritance.tlua");
+    fs::write(
+        &source,
+        "class Animal {\n    str name = \"animal\";\n    constructor(str name) { self.name = name; }\n    fn speak() -> str { return \"...\"; }\n}\nclass Dog extends Animal {\n    constructor(str name) { super(name); }\n    fn speak() -> str { return \"Woof \" + name; }\n    fn parent_speak() -> str { return super.speak(); }\n}\nclass Cat extends Animal {}\nlocal class pet = new Dog(\"Rex\");\nlocal class cat = new Cat(\"Mia\");\nprint(pet.speak());\nprint(pet.parent_speak());\nprint(cat.name, cat.speak());\n",
+    )
+    .unwrap();
+
+    let output = run(typelua().arg(&source));
+    assert!(output.status.success(), "{}", stderr(&output));
+    let printed = stdout(&output);
+    assert!(printed.contains("Woof Rex"), "{printed}");
+    assert!(printed.contains("..."), "{printed}");
+    assert!(printed.contains("Mia"), "{printed}");
+    let generated = fs::read_to_string(dir.join("inheritance.lua")).unwrap();
+    assert!(generated.contains("Dog = setmetatable({}, { __index = Animal })"));
+    assert!(generated.contains("super.__init(self, name)"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn reports_lua_runtime_errors() {
     let dir = temp_dir();
     let source = dir.join("boom.lua");

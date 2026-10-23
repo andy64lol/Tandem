@@ -8,7 +8,7 @@ TypeLua is an experimental proof of concept (version 0.1.1), and is not producti
 
 ## What you can do
 
-- **Write TypeLua:** use C-style declarations, functions, control flow, structs, dictionaries, homogeneous typed lists, fixed-shape tuples, statically typed key-value tables, and compile-time checks.
+- **Write TypeLua:** use C-style declarations, functions, control flow, structs, classes with `fn` methods, `self`, and inheritance, dictionaries, homogeneous typed lists, fixed-shape tuples, statically typed key-value tables, and compile-time checks.
 - **Retype deliberately:** use an explicit `as type` assertion when assigning a new type to a variable, or declare with `auto` to infer the type once and then lock it.
 - **Import the standard library:** bring Lua standard library packages into scope with `import string, math;` before using them.
 - **Compile and inspect:** generate ordinary Lua 5.4 files that you can keep, inspect, or use with Lua tools, with `-- tlua:line:column` source-map comments.
@@ -88,4 +88,4 @@ The library exposes `typelua::runtime::run_file("script.lua")` and `typelua::run
 
 ## Documentation
 
-Read [The TypeLua Book](docs/README.md), starting with the [introduction](docs/01-introduction.md) and [getting started](docs/02-getting-started.md). It covers the [language](docs/03-types.md), [CLI](docs/10-cli.md), [Rust API](docs/11-rust-api.md), and [current limitations](docs/12-limitations.md). Planned work is tracked in the [TODO list](todo.md).
+Read [The TypeLua Book](docs/README.md), starting with the [introduction](docs/01-introduction.md) and [getting started](docs/02-getting-started.md). It covers the [language](docs/03-types.md), [classes](docs/12-classes.md), [CLI](docs/10-cli.md), [Rust API](docs/11-rust-api.md), and [current limitations](docs/13-limitations.md). Planned work is tracked in the [TODO list](todo.md).

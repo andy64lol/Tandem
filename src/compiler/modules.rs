@@ -229,6 +229,14 @@ fn collect_requires(program: &[Top], out: &mut Vec<String>) {
         match top {
             Top::Fun(function) => collect_stmt_requires(&function.body, out),
             Top::Stmt(stmt) => collect_stmt_requires(std::slice::from_ref(stmt), out),
+            Top::Class(class) => {
+                for field in &class.fields {
+                    collect_expr_requires(&field.default, out);
+                }
+                for callable in class.methods.iter().chain(class.constructor.iter()) {
+                    collect_stmt_requires(&callable.body, out);
+                }
+            }
             Top::Struct(_) => {}
             Top::Import { .. } => {}
         }
@@ -290,6 +298,16 @@ fn collect_expr_requires(expr: &crate::compiler::ast::Expr, out: &mut Vec<String
                     push_unique(out, path);
                 }
             }
+            for arg in args {
+                collect_expr_requires(arg, out);
+            }
+        }
+        Expr::New(_, args) => {
+            for arg in args {
+                collect_expr_requires(arg, out);
+            }
+        }
+        Expr::SuperCall(args) | Expr::SuperMethod(_, args) => {
             for arg in args {
                 collect_expr_requires(arg, out);
             }

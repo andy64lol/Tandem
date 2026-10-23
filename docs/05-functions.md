@@ -37,4 +37,4 @@ Argument counts must fall between the number of required parameters and the tota
 
 Function declarations are collected before function bodies are checked, so functions may call declarations that appear later in the source. Function names may not duplicate each other or the built-in names `print` and `printf`.
 
-Functions are not values in 0.1: they cannot be stored in variables, passed as arguments, or returned. See [Limitations](12-limitations.md).
+Functions are not values in 0.1: they cannot be stored in variables, passed as arguments, or returned. See [Limitations](13-limitations.md). Class methods use the same `fn` syntax but run with an implicit `self`; see [Classes](12-classes.md).

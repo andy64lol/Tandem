@@ -1,10 +1,11 @@
-# 12. Limitations
+# 13. Limitations
 
 TypeLua 0.1.1 is a small proof of concept. The language does not currently implement:
 
-- classes, inheritance, or generics;
+- multiple inheritance, interfaces, static members, private members, or generics;
 - fully static typing for `dict` values, and for generic `table` values that were not initialized with a literal;
 - closures or first-class functions;
+- exporting class definitions from compiled modules; class values currently stay module-private;
 - optional types;
 - user-defined operators;
 - static member types for every Lua standard-library function: common members are typed, but the rest remain dynamic.

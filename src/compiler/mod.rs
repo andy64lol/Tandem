@@ -668,6 +668,237 @@ mod tests {
     }
 
     #[test]
+    fn compiles_classes_with_fn_methods_and_self() {
+        let lua = compile(
+            r#"
+            class hero {
+                str name = "Ada";
+                int health = 100;
+                constructor(str name) {
+                    self.name = name;
+                }
+                fn isAlive() -> bool {
+                    return health > 0;
+                }
+                fn damage(int amount) {
+                    health -= amount;
+                }
+                fn greeting() -> str {
+                    return "hi " + name;
+                }
+            }
+            class Hero = new hero("Ada");
+            print(Hero.isAlive());
+            Hero.damage(200);
+            print(Hero.isAlive());
+            "#,
+        )
+        .unwrap();
+        for expected in [
+            "hero = {}",
+            "hero.__index = hero",
+            "setmetatable({}, hero)",
+            "function hero.new(name)",
+            "function hero:isAlive()",
+            "function hero:damage(amount)",
+            r#"Hero = hero.new("Ada")"#,
+            "Hero:isAlive()",
+            "Hero:damage(200)",
+            "self.health = self.health - amount",
+            r#"("hi " .. self.name)"#,
+        ] {
+            assert!(lua.contains(expected), "expected {expected:?} in:\n{lua}");
+        }
+    }
+
+    #[test]
+    fn compiles_inheritance_with_super_and_metatables() {
+        let lua = compile(
+            r#"
+            class Animal {
+                str name = "animal";
+                constructor(str name) { self.name = name; }
+                fn speak() -> str { return "..."; }
+            }
+            class Dog extends Animal {
+                constructor(str name) { super(name); }
+                fn speak() -> str { return "Woof"; }
+                fn parent_speak() -> str { return super.speak(); }
+            }
+            local class pet = new Dog("Rex");
+            print(pet.speak());
+            print(pet.parent_speak());
+            "#,
+        )
+        .unwrap();
+        for expected in [
+            "Dog = setmetatable({}, { __index = Animal })",
+            "Dog.__index = Dog",
+            "function Dog.new(name)",
+            "function Dog:__init(name)",
+            "local super = Animal",
+            "super.__init(self, name)",
+            "function Dog:speak()",
+            "return super.speak(self)",
+            r#"pet = Dog.new("Rex")"#,
+            "pet:speak()",
+            "pet:parent_speak()",
+        ] {
+            assert!(lua.contains(expected), "expected {expected:?} in:\n{lua}");
+        }
+    }
+
+    #[test]
+    fn emits_parent_classes_before_children() {
+        let lua = compile(
+            r#"
+            class Child extends Parent {
+                constructor() { super(); }
+            }
+            class Parent {
+                constructor() {}
+            }
+            local class item = new Child;
+            "#,
+        )
+        .unwrap();
+        let parent = lua.find("Parent = {}").unwrap();
+        let child = lua
+            .find("Child = setmetatable({}, { __index = Parent })")
+            .unwrap();
+        assert!(parent < child, "expected parent before child in:\n{lua}");
+    }
+
+    #[test]
+    fn derived_classes_inherit_constructors_and_fields() {
+        let lua = compile(
+            r#"
+            class Animal {
+                str name = "animal";
+                constructor(str name) { self.name = name; }
+            }
+            class Dog extends Animal {
+                str breed = "mutt";
+            }
+            local class pet = new Dog("Rex");
+            print(pet.name, pet.breed);
+            "#,
+        )
+        .unwrap();
+        assert!(lua.contains("function Dog.new(name)"));
+        assert!(lua.contains("super.__init(self, name)"));
+        assert!(lua.contains(r#"self.breed = "mutt""#));
+    }
+
+    #[test]
+    fn rejects_invalid_inheritance() {
+        assert!(error_message(
+            "class A { constructor() {} }\nclass B extends A { constructor() {} }"
+        )
+        .contains("must call 'super(...)' as its first statement"));
+        assert!(
+            error_message("class A { constructor() { super(); } }").contains("has no base class")
+        );
+        assert!(
+            error_message(
+                "class A { fn value() -> int { return 1; } }\nclass B extends A { fn value() -> str { return \"x\"; } }"
+            )
+            .contains("different signature")
+        );
+        assert!(error_message("class B extends Missing {}").contains("extends unknown class"));
+        assert!(error_message("class A extends B {}\nclass B extends A {}")
+            .contains("inheritance cycle"));
+        assert!(
+            error_message("class A { int hp = 1; }\nclass B extends A { str hp = \"x\"; }")
+                .contains("redefines inherited field")
+        );
+        assert!(
+            error_message("class A { fn hp() {} }\nclass B extends A { int hp = 1; }")
+                .contains("conflicts with a method")
+        );
+        assert!(
+            error_message(
+                "class A { fn value() -> int { return 1; } }\nclass B extends A { fn call() { super.missing(); } }"
+            )
+            .contains("has no method 'missing'")
+        );
+    }
+
+    #[test]
+    fn accepts_subclasses_where_a_parent_class_is_expected() {
+        let lua = compile(
+            r#"
+            class Animal {
+                fn kind() -> str { return "animal"; }
+            }
+            class Dog extends Animal {
+                fn kind() -> str { return "dog"; }
+            }
+            fn describe(Animal animal) -> str { return animal.kind(); }
+            Animal pet = new Dog;
+            print(describe(new Dog));
+            "#,
+        )
+        .unwrap();
+        assert!(lua.contains("pet = Dog.new()"));
+        assert!(lua.contains("describe(Dog.new())"));
+    }
+
+    #[test]
+    fn classes_require_new_initializers() {
+        assert!(error_message("class Hero = 1;").contains("new ClassName"));
+        assert!(error_message("class Hero = new missing;").contains("unknown struct type"));
+        assert!(
+            error_message("class hero { fn greet() {} }\nclass Hero = new hero(1);")
+                .contains("expects 0")
+        );
+    }
+
+    #[test]
+    fn class_methods_require_fn_and_use_self() {
+        assert!(error_message("class hero { greet() {} }").contains("expected identifier"));
+        assert!(
+            error_message("class hero { fn greet() -> int { return this.health; } }")
+                .contains("unknown variable 'this'")
+        );
+        assert!(error_message("class hero { fn __init() {} }").contains("reserved for class"));
+        assert!(error_message("class hero { fn super() {} }").contains("reserved"));
+    }
+
+    #[test]
+    fn rejects_duplicate_class_members() {
+        assert!(error_message("class hero {\n int hp = 1;\n fn hp() {}\n}")
+            .contains("duplicate member"));
+        assert!(error_message("class hero { fn a() {} fn a() {} }").contains("duplicate member"));
+    }
+
+    #[test]
+    fn compiles_class_typed_parameters_and_returns() {
+        let lua = compile(
+            r#"
+            class hero {
+                int hp = 10;
+                fn isAlive() -> bool { return self.hp > 0; }
+            }
+            fn alive(hero h) -> bool { return h.isAlive(); }
+            local class Hero = new hero;
+            print(alive(Hero));
+            "#,
+        )
+        .unwrap();
+        assert!(lua.contains("function alive(h)"));
+        assert!(lua.contains("return h:isAlive()"));
+    }
+
+    #[test]
+    fn class_instances_are_not_struct_literals() {
+        assert!(
+            error_message("class hero { int hp = 1; }\nhero h = { hp = 2 };")
+                .contains("must be constructed with 'new hero'")
+        );
+    }
+
+    #[test]
     fn lua_modules_are_imported_dynamically() {
         let lua = with_modules(
             &[(

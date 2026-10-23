@@ -1,5 +1,6 @@
 use crate::compiler::ast::{
-    line_column, Expr, Fun, Param, Stmt, StmtKind, StructDef, StructField, Top, Ty, VarDecl,
+    line_column, ClassDef, ClassField, Expr, Fun, Param, Stmt, StmtKind, StructDef, StructField,
+    Top, Ty, VarDecl,
 };
 use crate::compiler::lexer::{Tok, Token};
 
@@ -188,6 +189,8 @@ impl Parser<'_> {
                 })()
             } else if self.eat_kw("struct") {
                 self.struct_def(pos).map(Top::Struct)
+            } else if self.eat_kw("class") {
+                self.class_top(pos)
             } else if self.eat_kw("fn") {
                 self.function(pos).map(Top::Fun)
             } else {
@@ -205,12 +208,35 @@ impl Parser<'_> {
     }
     fn function(&mut self, pos: usize) -> Result<Fun, String> {
         let name = self.expect_ident()?;
+        let params = self.params()?;
+        let ret = if self.eat_sym("->") {
+            self.ty()?
+        } else {
+            Ty::Void
+        };
+        let body = self.block()?;
+        let (line, column) = line_column(self.source, pos);
+        Ok(Fun {
+            name,
+            line,
+            column,
+            params,
+            ret,
+            body,
+        })
+    }
+    fn params(&mut self) -> Result<Vec<Param>, String> {
         self.expect_sym("(")?;
         let mut params = vec![];
         if !self.sym(")") {
             loop {
                 let ty = self.ty()?;
                 let name = self.expect_ident()?;
+                if name == "this" || name == "self" || name == "super" {
+                    return Err(self.err(format!(
+                        "'{name}' is reserved and cannot be a parameter name"
+                    )));
+                }
                 let default = if self.eat_sym("=") {
                     Some(self.expr(1)?)
                 } else {
@@ -228,20 +254,186 @@ impl Parser<'_> {
             }
         }
         self.expect_sym(")")?;
-        let ret = if self.eat_sym("->") {
-            self.ty()?
+        Ok(params)
+    }
+    fn class_top(&mut self, pos: usize) -> Result<Top, String> {
+        let name = self.expect_ident()?;
+        if self.eat_sym("=") {
+            let stmt = self.class_instance_after_name(name, false, false, pos)?;
+            return Ok(Top::Stmt(stmt));
+        }
+        let parent = if self.eat_kw("extends") {
+            Some(self.expect_ident()?)
         } else {
-            Ty::Void
+            None
         };
-        let body = self.block()?;
+        self.class_def_after_name(name, parent, pos).map(Top::Class)
+    }
+    fn class_instance_declaration(
+        &mut self,
+        is_local: bool,
+        is_const: bool,
+        pos: usize,
+    ) -> Result<Stmt, String> {
+        let name = self.expect_ident()?;
+        if self.sym("{") {
+            return Err(self.err("class definitions are only allowed at the top level".into()));
+        }
+        self.expect_sym("=")?;
+        self.class_instance_after_name(name, is_local, is_const, pos)
+    }
+    fn class_instance_after_name(
+        &mut self,
+        name: String,
+        is_local: bool,
+        is_const: bool,
+        pos: usize,
+    ) -> Result<Stmt, String> {
+        if name == "this" || name == "self" || name == "super" {
+            return Err(self.err(format!(
+                "'{name}' is reserved and cannot be a variable name"
+            )));
+        }
+        let value = self.expr(0)?;
+        self.expect_sym(";")?;
+        let Expr::New(class_name, _) = &value else {
+            return Err(
+                self.err("a 'class' declaration must be initialized with new ClassName".into())
+            );
+        };
+        Ok(self.make_stmt(
+            pos,
+            StmtKind::Decl(VarDecl {
+                ty: Ty::Struct(class_name.clone()),
+                name,
+                value,
+                is_const,
+                is_local,
+            }),
+        ))
+    }
+    fn class_def_after_name(
+        &mut self,
+        name: String,
+        parent: Option<String>,
+        pos: usize,
+    ) -> Result<ClassDef, String> {
+        if parent.as_deref() == Some(&name) {
+            return Err(self.err(format!("class '{name}' cannot extend itself")));
+        }
+        self.expect_sym("{")?;
+        let mut fields = Vec::new();
+        let mut constructor = None;
+        let mut methods = Vec::new();
+        while !self.sym("}") && !matches!(self.cur().kind, Tok::Eof) {
+            let member_pos = self.cur().pos;
+            if self.eat_kw("constructor") {
+                if constructor.is_some() {
+                    return Err(self.err("class can only define one constructor".into()));
+                }
+                let params = self.params()?;
+                if self.sym("->") {
+                    return Err(self.err("constructors cannot declare a return type".into()));
+                }
+                let body = self.block()?;
+                let (line, column) = line_column(self.source, member_pos);
+                constructor = Some(Fun {
+                    name: "constructor".into(),
+                    line,
+                    column,
+                    params,
+                    ret: Ty::Void,
+                    body,
+                });
+            } else if self.eat_kw("fn") {
+                let method_name = self.expect_ident()?;
+                if method_name == "constructor" {
+                    if constructor.is_some() {
+                        return Err(self.err("class can only define one constructor".into()));
+                    }
+                    let params = self.params()?;
+                    if self.sym("->") {
+                        return Err(self.err("constructors cannot declare a return type".into()));
+                    }
+                    let body = self.block()?;
+                    let (line, column) = line_column(self.source, member_pos);
+                    constructor = Some(Fun {
+                        name: "constructor".into(),
+                        line,
+                        column,
+                        params,
+                        ret: Ty::Void,
+                        body,
+                    });
+                    continue;
+                }
+                if method_name == "new" || method_name == "__init" {
+                    return Err(self.err(format!(
+                        "'{method_name}' is reserved for class construction"
+                    )));
+                }
+                if method_name == "__index" {
+                    return Err(self.err("'__index' is reserved for class method lookup".into()));
+                }
+                if method_name == "this" || method_name == "self" || method_name == "super" {
+                    return Err(self.err(format!(
+                        "'{method_name}' is reserved and cannot be a method name"
+                    )));
+                }
+                let params = self.params()?;
+                let ret = if self.eat_sym("->") {
+                    self.ty()?
+                } else {
+                    Ty::Void
+                };
+                let body = self.block()?;
+                let (line, column) = line_column(self.source, member_pos);
+                methods.push(Fun {
+                    name: method_name,
+                    line,
+                    column,
+                    params,
+                    ret,
+                    body,
+                });
+            } else {
+                let ty = self.ty()?;
+                if ty == Ty::Void {
+                    return Err(self.err("class fields cannot have type 'void'".into()));
+                }
+                let field_name = self.expect_ident()?;
+                if field_name == "this" || field_name == "self" || field_name == "super" {
+                    return Err(self.err(format!(
+                        "'{field_name}' is reserved and cannot be a field name"
+                    )));
+                }
+                if !self.eat_sym("=") {
+                    return Err(self.err(format!(
+                        "class field '{field_name}' requires an initializer"
+                    )));
+                }
+                let default = self.expr(1)?;
+                self.expect_sym(";")?;
+                let (line, column) = line_column(self.source, member_pos);
+                fields.push(ClassField {
+                    ty,
+                    name: field_name,
+                    default,
+                    line,
+                    column,
+                });
+            }
+        }
+        self.expect_sym("}")?;
         let (line, column) = line_column(self.source, pos);
-        Ok(Fun {
+        Ok(ClassDef {
             name,
+            parent,
             line,
             column,
-            params,
-            ret,
-            body,
+            fields,
+            constructor,
+            methods,
         })
     }
     fn struct_def(&mut self, pos: usize) -> Result<StructDef, String> {
@@ -326,10 +518,18 @@ impl Parser<'_> {
             }
         }
         if is_local || is_const {
+            if self.kw("class") {
+                self.bump();
+                return self.class_instance_declaration(is_local, is_const, pos);
+            }
             if let Some(decl) = self.inferred_require_declaration(is_local, is_const, pos)? {
                 return Ok(decl);
             }
             return self.declaration(is_local, is_const, pos);
+        }
+        if self.kw("class") {
+            self.bump();
+            return self.class_instance_declaration(false, false, pos);
         }
         if self.sym("{") {
             let body = self.block()?;
@@ -430,6 +630,11 @@ impl Parser<'_> {
             return Ok(None);
         }
         let name = self.expect_ident()?;
+        if name == "this" || name == "self" || name == "super" {
+            return Err(self.err(format!(
+                "'{name}' is reserved and cannot be a variable name"
+            )));
+        }
         self.expect_sym("=")?;
         let value = self.expr(0)?;
         self.expect_sym(";")?;
@@ -470,6 +675,11 @@ impl Parser<'_> {
             return Err(self.err("variables cannot have type 'void'".into()));
         }
         let name = self.expect_ident()?;
+        if name == "this" || name == "self" || name == "super" {
+            return Err(self.err(format!(
+                "'{name}' is reserved and cannot be a variable name"
+            )));
+        }
         self.expect_sym("=")?;
         let value = if matches!(ty, Ty::Tuple(_) | Ty::Auto) && self.sym("(") {
             self.tuple_literal()?
@@ -619,6 +829,27 @@ impl Parser<'_> {
             Tok::Ident(s) if s == "false" => {
                 self.bump();
                 Ok(Expr::Bool(false))
+            }
+            Tok::Ident(s) if s == "new" => {
+                self.bump();
+                let name = self.expect_ident()?;
+                let args = if self.sym("(") {
+                    self.call_args()?
+                } else {
+                    Vec::new()
+                };
+                Ok(Expr::New(name, args))
+            }
+            Tok::Ident(s) if s == "super" => {
+                self.bump();
+                if self.eat_sym(".") {
+                    let name = self.expect_ident()?;
+                    let args = self.call_args()?;
+                    Ok(Expr::SuperMethod(name, args))
+                } else {
+                    let args = self.call_args()?;
+                    Ok(Expr::SuperCall(args))
+                }
             }
             Tok::Ident(s) => {
                 self.bump();

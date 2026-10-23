@@ -14,6 +14,7 @@ Primitive types and collection types are checked at compile time and erased in g
 | `list Type` | Ordered values that all have the given type | `table` |
 | `tuple` | Ordered values with a fixed length and a fixed type at each position | `table` |
 | `void` | No return value; function return type only | `nil` |
+| class name | An instance created with `new` | table with a metatable |
 
 There are no implicit conversions. `int` and `float` are distinct static types, even though both use Lua numbers at runtime.
 
@@ -50,6 +51,8 @@ origin.x = 2.0;
 ```
 
 Struct initializers must provide each field exactly once with a matching value type. Struct declarations are top-level. Their values compile to Lua tables.
+
+A class name is also a type. Class instances are created with `new` and carry field and method types; class values cannot be initialized with table literals. See [Classes](12-classes.md).
 
 ```tlua
 table options = { debug = true, retries = 3 };

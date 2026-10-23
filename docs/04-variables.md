@@ -25,6 +25,8 @@ name = "TypeLua"; // now a str
 // name = 1;      // error: name is now a str
 ```
 
+Class instances use the special `class` declaration form: `class Player = new player;`, optionally with `local` or `const`. The class from the `new` expression supplies the static type. See [Classes](12-classes.md).
+
 The one exception to the type rule is a module binding: `module greetings = require("greetings.tlua");` and `local greetings = require("greetings.tlua");` infer the module type from `require`. See [Getting started](02-getting-started.md#split-a-program-across-files) for module imports.
 
 ### Automatic type inference

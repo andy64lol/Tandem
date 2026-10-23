@@ -17,15 +17,16 @@ This book is the complete reference for TypeLua 0.1. Chapters are ordered so a f
 6. [Statements](06-statements.md): assignment, `if`, `while`, `for`, `return`, and blocks.
 7. [Expressions](07-expressions.md): operators, precedence, standard library imports, and the built-in `print` and `printf`.
 8. [Comments](08-comments.md): C-style and Lua comment forms.
+9. [Classes](12-classes.md): typed fields, `fn` methods, `self`, constructors, `new` instances, and single inheritance.
 
 ## Part III — Tooling
 
-9. [Diagnostics](09-diagnostics.md): errors, warnings, and why a single warning blocks compilation.
-10. [Command line](10-cli.md): every CLI mode, output paths, arguments, and exit codes.
-11. [Rust API](11-rust-api.md): embed the compiler and the Lua runtime in a Rust program.
+10. [Diagnostics](09-diagnostics.md): errors, warnings, and why a single warning blocks compilation.
+11. [Command line](10-cli.md): every CLI mode, output paths, arguments, and exit codes.
+12. [Rust API](11-rust-api.md): embed the compiler and the Lua runtime in a Rust program.
 
 ## Part IV — Status
 
-12. [Limitations](12-limitations.md): what TypeLua does not do yet.
+13. [Limitations](13-limitations.md): what TypeLua does not do yet.
 
 The [project TODO list](../todo.md) tracks planned language, tooling, and runtime work.

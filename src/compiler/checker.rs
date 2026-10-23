@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::compiler::ast::{
     module_basename, parse_printf_format, retyped_global_names, Export, Expr, FnSig, FormatPart,
-    ListElement, ModuleExports, Stmt, StmtKind, StructDef, TableShape, Top, Ty,
+    Fun, ListElement, ModuleExports, Param, Stmt, StmtKind, StructDef, TableShape, Top, Ty,
 };
 use crate::compiler::stdlib;
 
@@ -13,20 +13,39 @@ struct Binding {
     inferred: bool,
     shape: Option<TableShape>,
 }
+type Structs = HashMap<String, HashMap<String, Ty>>;
+type Classes = HashMap<String, ClassInfo>;
+
+#[derive(Clone)]
+struct ClassInfo {
+    parent: Option<String>,
+    own_fields: HashMap<String, Ty>,
+    fields: HashMap<String, Ty>,
+    methods: HashMap<String, FnSig>,
+    constructor: Option<FnSig>,
+    line: usize,
+    column: usize,
+}
+
 struct Checker {
     scopes: Vec<HashMap<String, Binding>>,
     funcs: HashMap<String, FnSig>,
     modules: HashMap<String, ModuleExports>,
-    structs: HashMap<String, HashMap<String, Ty>>,
+    structs: Structs,
+    classes: Classes,
+    current_class: Option<String>,
     unstable_globals: HashSet<String>,
     imports: HashSet<String>,
     function_depth: usize,
+    current_constructor: bool,
+    allow_super_call: bool,
     position: Option<(usize, usize)>,
 }
 impl Checker {
     fn new(
         modules: HashMap<String, ModuleExports>,
-        structs: HashMap<String, HashMap<String, Ty>>,
+        structs: Structs,
+        classes: Classes,
         unstable_globals: HashSet<String>,
         imports: HashSet<String>,
     ) -> Self {
@@ -35,13 +54,20 @@ impl Checker {
             funcs: HashMap::new(),
             modules,
             structs,
+            classes,
+            current_class: None,
             unstable_globals,
             imports,
             function_depth: 0,
+            current_constructor: false,
+            allow_super_call: false,
             position: None,
         }
     }
     fn at(&self, message: String) -> String {
+        if message.contains(" at line ") {
+            return message;
+        }
         match self.position {
             Some((line, column)) => format!("{message} at line {line}, column {column}"),
             None => message,
@@ -123,12 +149,21 @@ impl Checker {
             return Ok(shape.named.get(name).cloned().unwrap_or(Ty::Any));
         }
         match self.expr(base)? {
-            Ty::Struct(struct_name) => self
-                .structs
-                .get(&struct_name)
-                .and_then(|fields| fields.get(name))
-                .cloned()
-                .ok_or_else(|| format!("struct '{struct_name}' has no field '{name}'")),
+            Ty::Struct(struct_name) => {
+                if let Some(field) = self
+                    .structs
+                    .get(&struct_name)
+                    .and_then(|fields| fields.get(name))
+                {
+                    return Ok(field.clone());
+                }
+                if class_method(&self.classes, &struct_name, name).is_some() {
+                    return Err(format!(
+                        "class '{struct_name}' has method '{name}'; call it with '{name}(...)'"
+                    ));
+                }
+                Err(format!("struct '{struct_name}' has no field '{name}'"))
+            }
             Ty::Map(key_ty, value_ty) if *key_ty == Ty::Str => Ok(*value_ty),
             Ty::Table | Ty::Dict => Ok(Ty::Any),
             Ty::Module(_) => {
@@ -154,7 +189,43 @@ impl Checker {
             )),
         }
     }
+    fn is_subclass(&self, child: &str, parent: &str) -> bool {
+        let mut current = Some(child);
+        while let Some(name) = current {
+            if name == parent {
+                return true;
+            }
+            current = self
+                .classes
+                .get(name)
+                .and_then(|class| class.parent.as_deref());
+        }
+        false
+    }
+    fn accepts(&self, expected: &Ty, got: &Ty) -> bool {
+        expected == got
+            || match (expected, got) {
+                (Ty::Struct(parent), Ty::Struct(child))
+                    if self.classes.contains_key(parent) && self.classes.contains_key(child) =>
+                {
+                    self.is_subclass(child, parent)
+                }
+                _ => false,
+            }
+    }
+    fn class_of(&self, base: &Expr) -> Option<String> {
+        match self.expr(base).ok()? {
+            Ty::Struct(name) if self.classes.contains_key(&name) => Some(name),
+            _ => None,
+        }
+    }
     fn method_return(&self, base: &Expr, name: &str, args: &[Expr]) -> Result<Ty, String> {
+        if let Some(class_name) = self.class_of(base) {
+            let Some(signature) = class_method(&self.classes, &class_name, name) else {
+                return Err(format!("class '{class_name}' has no method '{name}'"));
+            };
+            return self.check_signature_call(&format!("{class_name}.{name}"), signature, args);
+        }
         let (exports, namespace) = self.module_exports(base)?;
         if exports.dynamic {
             if let Some(members) = &exports.members {
@@ -182,6 +253,19 @@ impl Checker {
     }
     fn pop(&mut self) {
         self.scopes.pop();
+    }
+    fn field_type(&self, name: &str) -> Option<Ty> {
+        let class = self.current_class.as_ref()?;
+        self.classes
+            .get(class)
+            .and_then(|class| class.fields.get(name))
+            .cloned()
+    }
+    fn implicit_field(&self, name: &str) -> Option<Ty> {
+        if matches!(self.lookup_scope(name), Some(scope) if scope > 0) {
+            return None;
+        }
+        self.field_type(name)
     }
     fn lookup(&self, n: &str) -> Option<Binding> {
         self.scopes.iter().rev().find_map(|s| s.get(n).cloned())
@@ -326,7 +410,7 @@ impl Checker {
             Expr::Cast(_, _) => true,
             Expr::Unary(_, value) => Self::contains_cast(value),
             Expr::Bin(left, _, right) => Self::contains_cast(left) || Self::contains_cast(right),
-            Expr::Call(_, args) => args.iter().any(Self::contains_cast),
+            Expr::Call(_, args) | Expr::New(_, args) => args.iter().any(Self::contains_cast),
             Expr::MethodCall(base, _, args) => {
                 Self::contains_cast(base) || args.iter().any(Self::contains_cast)
             }
@@ -338,6 +422,9 @@ impl Checker {
                 ListElement::Previous => false,
             }),
             Expr::Tuple(values) => values.iter().any(Self::contains_cast),
+            Expr::SuperCall(args) | Expr::SuperMethod(_, args) => {
+                args.iter().any(Self::contains_cast)
+            }
             Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Var(_) => false,
         }
     }
@@ -450,6 +537,11 @@ impl Checker {
         if let Expr::Table(fields) = e {
             match expected {
                 Ty::Struct(name) => {
+                    if self.classes.contains_key(name) {
+                        return Err(format!(
+                            "class '{name}' must be constructed with 'new {name}'"
+                        ));
+                    }
                     let struct_fields = self
                         .structs
                         .get(name)
@@ -591,6 +683,9 @@ impl Checker {
                 "cannot use a dynamically typed value where {expected:?} is required"
             ));
         }
+        if self.accepts(expected, &got) {
+            return Ok(expected.clone());
+        }
         Ok(got)
     }
     fn expr(&self, e: &Expr) -> Result<Ty, String> {
@@ -600,6 +695,9 @@ impl Checker {
             Expr::Str(_) => Ok(Ty::Str),
             Expr::Bool(_) => Ok(Ty::Bool),
             Expr::Var(n) => {
+                if let Some(ty) = self.implicit_field(n) {
+                    return Ok(ty);
+                }
                 if let Some(binding) = self.lookup(n) {
                     return Ok(binding.ty);
                 }
@@ -773,6 +871,65 @@ impl Checker {
                 }
                 Ok(Ty::Tuple(Some(types)))
             }
+            Expr::New(name, args) => {
+                if self.lookup(name).is_some() {
+                    return Err(format!(
+                        "class '{name}' is shadowed by a variable with the same name"
+                    ));
+                }
+                let Some(class) = self.classes.get(name) else {
+                    return Err(format!("unknown class '{name}'"));
+                };
+                let constructor = class
+                    .constructor
+                    .clone()
+                    .or_else(|| {
+                        class
+                            .parent
+                            .as_ref()
+                            .map(|parent| effective_constructor(&self.classes, parent))
+                    })
+                    .unwrap_or_else(empty_signature);
+                self.check_signature_call(&format!("{name}.constructor"), &constructor, args)?;
+                Ok(Ty::Struct(name.clone()))
+            }
+            Expr::SuperCall(args) => {
+                let Some(class_name) = self.current_class.clone() else {
+                    return Err("'super(...)' can only be used inside a class".into());
+                };
+                if !self.current_constructor {
+                    return Err("'super(...)' can only be called from a constructor".into());
+                }
+                let Some(parent) = self.classes[&class_name].parent.clone() else {
+                    return Err(format!(
+                        "class '{class_name}' has no base class to call with 'super(...)'"
+                    ));
+                };
+                if !self.allow_super_call {
+                    return Err(
+                        "'super(...)' must be the first statement in a derived constructor".into(),
+                    );
+                }
+                let constructor = effective_constructor(&self.classes, &parent);
+                self.check_signature_call(&format!("{parent}.constructor"), &constructor, args)?;
+                Ok(Ty::Void)
+            }
+            Expr::SuperMethod(name, args) => {
+                let Some(class_name) = self.current_class.clone() else {
+                    return Err(format!(
+                        "'super.{name}(...)' can only be used inside a class"
+                    ));
+                };
+                let Some(parent) = self.classes[&class_name].parent.clone() else {
+                    return Err(format!(
+                        "class '{class_name}' has no base class to call with 'super.{name}(...)'"
+                    ));
+                };
+                let Some(signature) = class_method(&self.classes, &parent, name) else {
+                    return Err(format!("class '{parent}' has no method '{name}'"));
+                };
+                self.check_signature_call(&format!("{parent}.{name}"), signature, args)
+            }
             Expr::Call(n, args) => {
                 if n == "require" {
                     let [Expr::Str(path)] = args.as_slice() else {
@@ -910,6 +1067,21 @@ impl Checker {
                 Ok(())
             }
             StmtKind::Assign(n, op, e) => {
+                if n == "this" || n == "self" {
+                    return Err(format!("cannot assign to '{n}'"));
+                }
+                if let Some(field_ty) = self.implicit_field(n) {
+                    if op != "=" && !matches!(field_ty, Ty::Int | Ty::Float | Ty::Any) {
+                        return Err(format!("compound assignment {op} requires a numeric field"));
+                    }
+                    let got = self.expr_as(e, &field_ty)?;
+                    if got != field_ty {
+                        return Err(format!(
+                            "assignment to field '{n}' expects {field_ty:?}, got {got:?}"
+                        ));
+                    }
+                    return Ok(());
+                }
                 let Some(binding) = self.lookup(n) else {
                     let inferred = self.expr(e)?;
                     if op == "=" {
@@ -1182,7 +1354,82 @@ impl Checker {
     }
 }
 
-fn collect_structs(program: &[Top]) -> Result<HashMap<String, HashMap<String, Ty>>, String> {
+fn check_callable(
+    c: &mut Checker,
+    label: &str,
+    function: &Fun,
+    class: Option<&str>,
+    constructor: bool,
+) -> Result<(), String> {
+    c.position = Some((function.line, function.column));
+    let previous_class = c.current_class.clone();
+    let previous_constructor = c.current_constructor;
+    let previous_super_call = c.allow_super_call;
+    c.current_class = class.map(str::to_string);
+    c.current_constructor = constructor;
+    let derived_constructor = constructor
+        && class.is_some_and(|name| {
+            c.classes
+                .get(name)
+                .is_some_and(|info| info.parent.is_some())
+        });
+    c.allow_super_call = derived_constructor;
+    if derived_constructor
+        && !matches!(
+            function.body.first(),
+            Some(Stmt {
+                kind: StmtKind::Expr(Expr::SuperCall(_)),
+                ..
+            })
+        )
+    {
+        return Err(format!(
+            "constructor for '{}' must call 'super(...)' as its first statement",
+            class.unwrap_or_default()
+        ));
+    }
+    let outer_types = c.type_snapshot();
+    for name in c.unstable_globals.clone() {
+        c.set_type(&name, Ty::Any);
+    }
+    c.function_depth += 1;
+    c.push();
+    if let Some(class_name) = class {
+        c.declare("self", Ty::Struct(class_name.to_string()), false)?;
+    }
+    c.allow_super_call = false;
+    for p in &function.params {
+        if let Some(d) = &p.default {
+            let got = c.expr_as(d, &p.ty)?;
+            if got != p.ty {
+                return Err(format!(
+                    "default value for parameter '{}' expects {:?}, got {:?}",
+                    p.name, p.ty, got
+                ));
+            }
+        }
+        c.declare(&p.name, p.ty.clone(), true)?;
+    }
+    c.allow_super_call = derived_constructor;
+    for (index, statement) in function.body.iter().enumerate() {
+        c.stmt(statement, &function.ret)?;
+        if index == 0 {
+            c.allow_super_call = false;
+        }
+    }
+    if function.ret != Ty::Void && !block_returns(&function.body) {
+        return Err(format!("{label} must return a value on every path"));
+    }
+    c.pop();
+    c.function_depth -= 1;
+    c.restore_types(&outer_types);
+    c.current_class = previous_class;
+    c.current_constructor = previous_constructor;
+    c.allow_super_call = previous_super_call;
+    Ok(())
+}
+
+fn collect_structs(program: &[Top]) -> Result<Structs, String> {
     let mut structs = HashMap::new();
     for top in program {
         let Top::Struct(definition) = top else {
@@ -1213,15 +1460,246 @@ fn collect_structs(program: &[Top]) -> Result<HashMap<String, HashMap<String, Ty
             ));
         }
     }
+    Ok(structs)
+}
+
+fn signature(params: &[Param], ret: Ty) -> FnSig {
+    FnSig {
+        args: params.iter().map(|param| param.ty.clone()).collect(),
+        required: params
+            .iter()
+            .take_while(|param| param.default.is_none())
+            .count(),
+        ret,
+        varargs: false,
+    }
+}
+
+fn empty_signature() -> FnSig {
+    FnSig {
+        args: Vec::new(),
+        required: 0,
+        ret: Ty::Void,
+        varargs: false,
+    }
+}
+
+fn signatures_match(left: &FnSig, right: &FnSig) -> bool {
+    left.args == right.args
+        && left.required == right.required
+        && left.ret == right.ret
+        && left.varargs == right.varargs
+}
+
+fn effective_constructor(classes: &Classes, class_name: &str) -> FnSig {
+    let mut current = Some(class_name);
+    while let Some(name) = current {
+        let Some(class) = classes.get(name) else {
+            break;
+        };
+        if let Some(constructor) = &class.constructor {
+            return constructor.clone();
+        }
+        current = class.parent.as_deref();
+    }
+    empty_signature()
+}
+
+fn class_method<'a>(classes: &'a Classes, class_name: &str, method: &str) -> Option<&'a FnSig> {
+    let mut current = Some(class_name);
+    while let Some(name) = current {
+        let class = classes.get(name)?;
+        if let Some(signature) = class.methods.get(method) {
+            return Some(signature);
+        }
+        current = class.parent.as_deref();
+    }
+    None
+}
+
+fn class_field(classes: &Classes, class_name: &str, field: &str) -> Option<Ty> {
+    let class = classes.get(class_name)?;
+    class.fields.get(field).cloned()
+}
+
+fn collect_classes(program: &[Top]) -> Result<Classes, String> {
+    let mut classes = HashMap::new();
+    for top in program {
+        let Top::Class(definition) = top else {
+            continue;
+        };
+        let mut fields = HashMap::new();
+        let mut members = HashSet::new();
+        for field in &definition.fields {
+            if field.ty == Ty::Void {
+                return Err(format!(
+                    "field '{}.{}' cannot have type 'void' at line {}, column {}",
+                    definition.name, field.name, field.line, field.column
+                ));
+            }
+            if !members.insert(field.name.clone()) {
+                return Err(format!(
+                    "duplicate member '{}.{}' at line {}, column {}",
+                    definition.name, field.name, field.line, field.column
+                ));
+            }
+            fields.insert(field.name.clone(), field.ty.clone());
+        }
+        let mut methods = HashMap::new();
+        for method in &definition.methods {
+            if !members.insert(method.name.clone()) {
+                return Err(format!(
+                    "duplicate member '{}.{}' at line {}, column {}",
+                    definition.name, method.name, method.line, method.column
+                ));
+            }
+            methods.insert(
+                method.name.clone(),
+                signature(&method.params, method.ret.clone()),
+            );
+        }
+        let constructor = definition
+            .constructor
+            .as_ref()
+            .map(|constructor| signature(&constructor.params, Ty::Void));
+        if classes
+            .insert(
+                definition.name.clone(),
+                ClassInfo {
+                    parent: definition.parent.clone(),
+                    own_fields: fields.clone(),
+                    fields,
+                    methods,
+                    constructor,
+                    line: definition.line,
+                    column: definition.column,
+                },
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "duplicate class '{}' at line {}, column {}",
+                definition.name, definition.line, definition.column
+            ));
+        }
+    }
+    Ok(classes)
+}
+
+fn resolve_class_fields(
+    name: &str,
+    classes: &Classes,
+    visiting: &mut HashSet<String>,
+    resolved: &mut HashMap<String, HashMap<String, Ty>>,
+) -> Result<HashMap<String, Ty>, String> {
+    if let Some(fields) = resolved.get(name) {
+        return Ok(fields.clone());
+    }
+    let Some(class) = classes.get(name) else {
+        return Err(format!("unknown class '{name}'"));
+    };
+    if !visiting.insert(name.to_string()) {
+        return Err(format!(
+            "class inheritance cycle involving '{name}' at line {}, column {}",
+            class.line, class.column
+        ));
+    }
+    let line = class.line;
+    let column = class.column;
+    let parent = class.parent.clone();
+    let own_fields = class.own_fields.clone();
+    let mut fields = if let Some(parent) = &parent {
+        if !classes.contains_key(parent) {
+            return Err(format!(
+                "class '{name}' extends unknown class '{parent}' at line {line}, column {column}"
+            ));
+        }
+        resolve_class_fields(parent, classes, visiting, resolved)?
+    } else {
+        HashMap::new()
+    };
+    for (field_name, field_ty) in own_fields {
+        if let Some(inherited) = fields.get(&field_name) {
+            if inherited != &field_ty {
+                return Err(format!(
+                    "class '{name}' redefines inherited field '{field_name}' as {field_ty:?} at line {line}, column {column}; inherited type is {inherited:?}"
+                ));
+            }
+        }
+        fields.insert(field_name, field_ty);
+    }
+    visiting.remove(name);
+    resolved.insert(name.to_string(), fields.clone());
+    Ok(fields)
+}
+
+fn resolve_classes(classes: &mut Classes) -> Result<(), String> {
+    let mut resolved = HashMap::new();
+    let mut names = classes.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    for name in &names {
+        let fields = resolve_class_fields(name, classes, &mut HashSet::new(), &mut resolved)?;
+        if let Some(class) = classes.get_mut(name) {
+            class.fields = fields;
+        }
+    }
+    for name in names {
+        let Some(class) = classes.get(&name) else {
+            continue;
+        };
+        let line = class.line;
+        let column = class.column;
+        let parent = class.parent.clone();
+        let own_fields = class.own_fields.clone();
+        let methods = class.methods.clone();
+        let Some(parent_name) = parent else {
+            continue;
+        };
+        for field_name in own_fields.keys() {
+            if class_method(classes, &parent_name, field_name).is_some() {
+                return Err(format!(
+                    "field '{name}.{field_name}' conflicts with a method of the same name at line {line}, column {column}"
+                ));
+            }
+        }
+        for (method_name, method_signature) in &methods {
+            if class_field(classes, &parent_name, method_name).is_some() {
+                return Err(format!(
+                    "method '{name}.{method_name}' conflicts with an inherited field of the same name at line {line}, column {column}"
+                ));
+            }
+            if let Some(inherited) = class_method(classes, &parent_name, method_name) {
+                if !signatures_match(inherited, method_signature) {
+                    return Err(format!(
+                        "method '{name}.{method_name}' overrides an inherited method with a different signature at line {line}, column {column}"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_types(program: &[Top]) -> Result<(Structs, Classes), String> {
+    let mut structs = collect_structs(program)?;
+    let mut classes = collect_classes(program)?;
+    resolve_classes(&mut classes)?;
+    for (name, class) in &classes {
+        if structs.insert(name.clone(), class.fields.clone()).is_some() {
+            return Err(format!(
+                "class '{name}' conflicts with a struct of the same name"
+            ));
+        }
+    }
     for fields in structs.values() {
         for ty in fields.values() {
             validate_type(ty, &structs)?;
         }
     }
-    Ok(structs)
+    Ok((structs, classes))
 }
 
-fn validate_type(ty: &Ty, structs: &HashMap<String, HashMap<String, Ty>>) -> Result<(), String> {
+fn validate_type(ty: &Ty, structs: &Structs) -> Result<(), String> {
     match ty {
         Ty::Struct(name) if !structs.contains_key(name) => {
             Err(format!("unknown struct type '{name}'"))
@@ -1252,10 +1730,7 @@ fn validate_type(ty: &Ty, structs: &HashMap<String, HashMap<String, Ty>>) -> Res
     }
 }
 
-fn validate_program_types(
-    program: &[Top],
-    structs: &HashMap<String, HashMap<String, Ty>>,
-) -> Result<(), String> {
+fn validate_program_types(program: &[Top], structs: &Structs) -> Result<(), String> {
     fn validate_stmts(
         statements: &[Stmt],
         structs: &HashMap<String, HashMap<String, Ty>>,
@@ -1306,6 +1781,23 @@ fn validate_program_types(
             }
             Top::Stmt(statement) => validate_stmts(std::slice::from_ref(statement), structs)?,
             Top::Struct(StructDef { .. }) => {}
+            Top::Class(class) => {
+                let result = (|| {
+                    for field in &class.fields {
+                        validate_type(&field.ty, structs)?;
+                    }
+                    for callable in class.methods.iter().chain(class.constructor.iter()) {
+                        validate_type(&callable.ret, structs)?;
+                        for param in &callable.params {
+                            validate_type(&param.ty, structs)?;
+                        }
+                    }
+                    Ok(())
+                })();
+                result.map_err(|message: String| {
+                    format!("{message} at line {}, column {}", class.line, class.column)
+                })?;
+            }
             Top::Import { .. } => {}
         }
     }
@@ -1353,11 +1845,17 @@ pub(crate) fn check(
     program: &[Top],
     modules: &HashMap<String, ModuleExports>,
 ) -> Result<(), String> {
-    let structs = collect_structs(program)?;
+    let (structs, classes) = collect_types(program)?;
     validate_program_types(program, &structs)?;
     let unstable_globals = retyped_global_names(program);
     let imports = collect_imports(program)?;
-    let mut c = Checker::new(modules.clone(), structs, unstable_globals, imports.clone());
+    let mut c = Checker::new(
+        modules.clone(),
+        structs,
+        classes,
+        unstable_globals,
+        imports.clone(),
+    );
     c.funcs.insert(
         "print".into(),
         FnSig {
@@ -1430,6 +1928,12 @@ pub(crate) fn check(
                                 decl.name, decl.name
                             ));
                         }
+                        if c.classes.contains_key(&decl.name) {
+                            return Err(format!(
+                                "cannot declare variable '{}': a class with that name already exists",
+                                decl.name
+                            ));
+                        }
                         let declared = if decl.ty == Ty::Auto {
                             Ty::Any
                         } else {
@@ -1446,6 +1950,12 @@ pub(crate) fn check(
         }
         for t in program {
             if let Top::Fun(f) = t {
+                if c.classes.contains_key(&f.name) {
+                    return Err(format!(
+                        "function '{}' conflicts with a class of the same name",
+                        f.name
+                    ));
+                }
                 if c.funcs.contains_key(&f.name) {
                     return Err(format!(
                         "function '{}' is already defined or reserved",
@@ -1530,8 +2040,7 @@ pub(crate) fn check(
                     }
                 }
                 Top::Stmt(s) => c.stmt(s, &Ty::Void)?,
-                Top::Fun(_) => {}
-                Top::Struct(_) => {}
+                Top::Fun(_) | Top::Struct(_) | Top::Class(_) => {}
                 Top::Import { .. } => {}
             }
         }
@@ -1539,37 +2048,40 @@ pub(crate) fn check(
             let Top::Fun(f) = t else {
                 continue;
             };
-            c.position = Some((f.line, f.column));
-            let outer_types = c.type_snapshot();
-            for name in c.unstable_globals.clone() {
-                c.set_type(&name, Ty::Any);
-            }
-            c.function_depth += 1;
-            c.push();
-            for p in &f.params {
-                if let Some(d) = &p.default {
-                    let got = c.expr_as(d, &p.ty)?;
-                    if got != p.ty {
-                        return Err(format!(
-                            "default value for parameter '{}' expects {:?}, got {:?}",
-                            p.name, p.ty, got
-                        ));
-                    }
+            check_callable(&mut c, &format!("function '{}'", f.name), f, None, false)?;
+        }
+        for t in program {
+            let Top::Class(class) = t else {
+                continue;
+            };
+            for field in &class.fields {
+                c.position = Some((field.line, field.column));
+                let got = c.expr_as(&field.default, &field.ty)?;
+                if got != field.ty {
+                    return Err(format!(
+                        "field '{}.{}' expects {:?}, got {:?}",
+                        class.name, field.name, field.ty, got
+                    ));
                 }
-                c.declare(&p.name, p.ty.clone(), true)?;
             }
-            for s in &f.body {
-                c.stmt(s, &f.ret)?;
+            if let Some(constructor) = &class.constructor {
+                check_callable(
+                    &mut c,
+                    &format!("constructor '{}'", class.name),
+                    constructor,
+                    Some(&class.name),
+                    true,
+                )?;
             }
-            if f.ret != Ty::Void && !block_returns(&f.body) {
-                return Err(format!(
-                    "function '{}' must return a value on every path",
-                    f.name
-                ));
+            for method in &class.methods {
+                check_callable(
+                    &mut c,
+                    &format!("method '{}.{}'", class.name, method.name),
+                    method,
+                    Some(&class.name),
+                    false,
+                )?;
             }
-            c.pop();
-            c.function_depth -= 1;
-            c.restore_types(&outer_types);
         }
         Ok(())
     })();

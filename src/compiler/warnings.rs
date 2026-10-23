@@ -87,6 +87,14 @@ impl WarnChecker {
             match top {
                 Top::Fun(function) => self.function(function),
                 Top::Stmt(stmt) => self.stmt(stmt, false),
+                Top::Class(class) => {
+                    for field in &class.fields {
+                        self.expr(&field.default);
+                    }
+                    for callable in class.methods.iter().chain(class.constructor.iter()) {
+                        self.function(callable);
+                    }
+                }
                 Top::Struct(_) => {}
                 Top::Import { .. } => {}
             }
@@ -203,6 +211,16 @@ impl WarnChecker {
             Expr::Member(base, _) => self.expr(base),
             Expr::MethodCall(base, _, args) => {
                 self.expr(base);
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
+            Expr::New(_, args) => {
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
+            Expr::SuperCall(args) | Expr::SuperMethod(_, args) => {
                 for arg in args {
                     self.expr(arg);
                 }
