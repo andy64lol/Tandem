@@ -66,10 +66,10 @@ impl<'a> Parser<'a> {
     fn expect_ident(&mut self) -> Result<String, String> {
         if let Tok::Ident(name) = self.cur().kind.clone() {
             self.bump();
-            if name == "__typelua_init_state" {
+            if name == "__tandem_init_state" {
                 return Err(self.err_at(
                     self.t[self.i.saturating_sub(1)].pos,
-                    "'__typelua_init_state' is reserved for compiler use".into(),
+                    "'__tandem_init_state' is reserved for compiler use".into(),
                 ));
             }
             Ok(name)

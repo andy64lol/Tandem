@@ -1,5 +1,5 @@
 CARGO ?= cargo
-BINARY := typelua
+BINARY := tandem
 PREFIX ?= /usr/local
 DESTDIR ?=
 ARGS ?=

@@ -1,8 +1,8 @@
 [package]
-name = "typelua"
+name = "tandem"
 version = "0.1.1"
 edition = "2021"
-description = "A small strictly typed, C-style language that transpiles to Lua 5.4"
+description = "Tandem: a small strictly typed, C-style language that transpiles to Lua 5.4"
 license = "MIT"
 
 [dependencies]

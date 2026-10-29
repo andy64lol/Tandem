@@ -20,13 +20,13 @@ There are no implicit conversions. `int` and `float` are distinct static types, 
 
 `auto` is not a type of its own: it infers a variable's type from its initializer and locks it. It is valid only in a variable declaration with an initializer. See [Variables](04-variables.md#automatic-type-inference).
 
-A declaration can use the `module` type to bind a required file: `module greetings = require("greetings.tlua");`. The compiler infers the module's exported members from that file. A bare `module` type outside such a declaration is rejected.
+A declaration can use the `module` type to bind a required file: `module greetings = require("greetings.tdm");`. The compiler infers the module's exported members from that file. A bare `module` type outside such a declaration is rejected.
 
 Lists use a type after `list`, for example `list int scores = [10, 20, 30];`. List elements must match that type. Lists use square brackets and Lua's one-based indexes. Do not use `int[]`; curly braces are for tables and dictionaries, and parentheses are for tuples.
 
 A plain `table` is a generic Lua table whose keys and values are dynamic. A generic table initialized with a table literal keeps the static types of its named fields and positional values for reads through that variable: `table t = { count = 1 }; int n = t.count;` is checked. Assigning a known field or index validates its value type. Reassigning the whole table makes subsequent reads dynamic again. `table Key Value` is a statically typed table: `Key` must be `str` or `int`, and every read or write is checked against `Value`. With `str` keys, literals use named fields and values can be read with both `t.name` and `t["name"]`. With `int` keys, literals are positional and receive keys 1, 2, 3, and so on. Typed tables still compile to ordinary Lua tables.
 
-```tlua
+```tdm
 table str int ages = { alice = 21, bob = 32 };
 int bob = ages.bob;
 ages["carol"] = 17;
@@ -40,7 +40,7 @@ Use `dict` for named keys, `list Type` for resizable ordered values of one type,
 
 Structs define named fields and their types:
 
-```tlua
+```tdm
 struct Point {
     float x;
     float y;
@@ -54,7 +54,7 @@ Struct initializers must provide each field exactly once with a matching value t
 
 A class name is also a type. Class instances are created with `new` and carry field and method types; class values cannot be initialized with table literals. See [Classes](12-classes.md).
 
-```tlua
+```tdm
 table options = { debug = true, retries = 3 };
 print(options["debug"]);
 

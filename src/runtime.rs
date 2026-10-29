@@ -203,7 +203,7 @@ mod tests {
     fn temp_dir() -> std::path::PathBuf {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let id = NEXT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("typelua-runtime-{}-{id}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tandem-runtime-{}-{id}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

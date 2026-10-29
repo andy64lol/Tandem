@@ -2,7 +2,7 @@
 
 Classes group typed fields with methods. Define one with `class Name { ... }`:
 
-```tlua
+```tdm
 class player {
     str name = "Ada";
     int health = 100;
@@ -21,7 +21,7 @@ class player {
 }
 ```
 
-Methods keep the `fn` keyword. They run with an implicit instance, available as `self`, which cannot be reassigned. TypeLua does not use a `this` keyword. Fields can be read and assigned directly by name; write `self.health` when a parameter or local variable has the same name. Field and method names cannot collide.
+Methods keep the `fn` keyword. They run with an implicit instance, available as `self`, which cannot be reassigned. Tandem does not use a `this` keyword. Fields can be read and assigned directly by name; write `self.health` when a parameter or local variable has the same name. Field and method names cannot collide.
 
 Fields are declared like typed variables and normally need an initializer. The default is evaluated for every new instance before the constructor body runs; in a derived class, the child's field defaults run after base constructors and before the rest of the child constructor. A generic field such as `T value;` may omit its initializer so the constructor can set it. A class may define at most one `constructor`, and constructors cannot declare a return type.
 
@@ -29,14 +29,14 @@ Fields are declared like typed variables and normally need an initializer. The d
 
 `new` creates an instance. Parentheses are optional when there are no arguments:
 
-```tlua
+```tdm
 local class Player = new player;
 local class Rival = new player("Grace");
 ```
 
-`class` is a special declaration type: the compiler distinguishes a class definition (`class player { ... }`) from an instance declaration (`class Player = new player;`) by the `{` or `=` after the name. The variable takes the static class type of the `new` expression. `local` and `const` may be used as for other declarations. Calling a method uses the same dot syntax as other members; TypeLua emits the Lua method call with `:`:
+`class` is a special declaration type: the compiler distinguishes a class definition (`class player { ... }`) from an instance declaration (`class Player = new player;`) by the `{` or `=` after the name. The variable takes the static class type of the `new` expression. `local` and `const` may be used as for other declarations. Calling a method uses the same dot syntax as other members; Tandem emits the Lua method call with `:`:
 
-```tlua
+```tdm
 print(Player.name);
 print(Player.isAlive());
 Player.damage(30);
@@ -45,7 +45,7 @@ print(Player.isAlive());
 
 Class names can also be written directly as parameter, return, or variable types:
 
-```tlua
+```tdm
 fn alive(player p) -> bool {
     return p.isAlive();
 }
@@ -55,7 +55,7 @@ fn alive(player p) -> bool {
 
 Use `static` for class fields and methods. Static methods have no implicit `self`; access static fields through the class name:
 
-```tlua
+```tdm
 class Counter {
     static int value = 0;
 
@@ -72,7 +72,7 @@ Static fields are initialized when the class is loaded. Static fields and method
 
 Use `private` before a field or method to restrict access to the class that declares it:
 
-```tlua
+```tdm
 class Account {
     private int balance = 0;
 
@@ -92,7 +92,7 @@ Privacy is checked by the compiler. Existing names, including underscore-prefixe
 
 Generic functions infer type arguments from their call arguments. Generic classes require explicit type arguments when constructed and when used as types:
 
-```tlua
+```tdm
 fn identity<T>(T value) -> T {
     return value;
 }
@@ -121,7 +121,7 @@ Classes are not created from table literals. `player { name = "Ada", health = 10
 
 A class can extend multiple classes and interfaces. The first concrete class base is the primary base for `super(...)`, `super.method(...)`, and constructor arguments; later concrete bases are initialized in order and must have no required constructor arguments. Shared ancestors are initialized once. Interfaces add method requirements but no runtime base table.
 
-```tlua
+```tdm
 class enemy {
     str name = "enemy";
     int health = 10;
@@ -152,7 +152,7 @@ class boss extends enemy {
 
 Separate concrete bases with commas. An interface can be listed in `extends` or in `implements`; both forms require the class to provide every declared method with a matching signature. Interfaces may extend other interfaces:
 
-```tlua
+```tdm
 interface Named {
     fn name() -> str;
 }
@@ -175,7 +175,7 @@ Use `super.method(...)` to call the primary base implementation of an overridden
 
 A child instance can be used wherever the parent class type is expected:
 
-```tlua
+```tdm
 fn hurt(enemy target) {
     target.damage(5);
 }
@@ -191,19 +191,19 @@ Classes compile to ordinary Lua tables and metatables. The class table holds the
 
 ```lua
 local Hero, player
-local __typelua_init_state = setmetatable({}, { __mode = "k" })
+local __tandem_init_state = setmetatable({}, { __mode = "k" })
 player = {}
 player.__index = player
 
 function player.new(name)
     local self = setmetatable({}, player)
-    __typelua_init_state[self] = {}
+    __tandem_init_state[self] = {}
     self:__init(name)
     return self
 end
 
 function player:__init(name)
-    local initialized = __typelua_init_state[self]
+    local initialized = __tandem_init_state[self]
     if initialized["player"] then return end
     initialized["player"] = true
     self.name = "Ada"
@@ -237,7 +237,7 @@ function boss:__init(name, phase)
 end
 ```
 
-Fields are normal table entries on the instance. Methods are table entries on the class, found through `__index`. TypeLua emits colon calls for class methods so Lua passes `self` automatically. No runtime library or TypeLua-specific value representation is required.
+Fields are normal table entries on the instance. Methods are table entries on the class, found through `__index`. Tandem emits colon calls for class methods so Lua passes `self` automatically. No runtime library or Tandem-specific value representation is required.
 
 ## Current restrictions
 

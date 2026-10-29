@@ -1,12 +1,12 @@
-# The TypeLua Book
+# The Tandem Book
 
-TypeLua is an experimental, statically typed, C-style language that transpiles to Lua 5.4. It compiles `.tlua` source files to plain Lua and can run either the generated Lua or ordinary `.lua` files through its embedded runtime. No separate Lua executable is required.
+Tandem is an experimental, statically typed, C-style language that transpiles to Lua 5.4. It compiles `.tdm` source files to plain Lua and can run either the generated Lua or ordinary `.lua` files through its embedded runtime. No separate Lua executable is required.
 
-This book is the complete reference for TypeLua 0.1. Chapters are ordered so a first-time reader can learn the language from the beginning and jump into the reference chapters as needed.
+This book is the complete reference for Tandem 0.1. Chapters are ordered so a first-time reader can learn the language from the beginning and jump into the reference chapters as needed.
 
 ## Part I — Getting started
 
-1. [Introduction](01-introduction.md): what TypeLua is, how compilation works, and a first taste of the syntax.
+1. [Introduction](01-introduction.md): what Tandem is, how compilation works, and a first taste of the syntax.
 2. [Getting started](02-getting-started.md): build the compiler, run a first program, and check a file without running it.
 
 ## Part II — The language
@@ -27,6 +27,6 @@ This book is the complete reference for TypeLua 0.1. Chapters are ordered so a f
 
 ## Part IV — Status
 
-13. [Limitations](13-limitations.md): what TypeLua does not do yet.
+13. [Limitations](13-limitations.md): what Tandem does not do yet.
 
 The [project TODO list](../todo.md) tracks planned language, tooling, and runtime work.

@@ -1,20 +1,20 @@
 # 11. Rust API
 
-TypeLua uses [`mlua`](https://docs.rs/mlua/) with Lua 5.4 and its vendored Lua build. The Rust library exposes the compiler and runtime as separate modules:
+Tandem uses [`mlua`](https://docs.rs/mlua/) with Lua 5.4 and its vendored Lua build. The Rust library exposes the compiler and runtime as separate modules:
 
-- `typelua::compiler::compile(&str) -> Result<String, Vec<Diagnostic>>` parses and type-checks TypeLua source, then returns generated Lua. On any diagnostic it returns the diagnostics instead; because warnings are fatal, a single warning also fails compilation.
-- `typelua::compiler::Diagnostic` carries a `severity` (`Severity::Error` or `Severity::Warning`), a `message`, and optional `line` and `column` values.
-- `typelua::runtime::run_file(path)` runs an existing Lua file.
-- `typelua::runtime::run_source(source, chunk_name)` runs Lua source held in memory.
-- `typelua::runtime::RuntimeConfig` sets optional Lua memory and instruction limits.
-- `typelua::runtime::run_source_with_setup(...)` runs Lua after a host callback has installed additional Lua APIs.
-- `typelua::mlua` re-exports the `mlua` crate so hosts and the runtime use the same Lua types.
+- `tandem::compiler::compile(&str) -> Result<String, Vec<Diagnostic>>` parses and type-checks Tandem source, then returns generated Lua. On any diagnostic it returns the diagnostics instead; because warnings are fatal, a single warning also fails compilation.
+- `tandem::compiler::Diagnostic` carries a `severity` (`Severity::Error` or `Severity::Warning`), a `message`, and optional `line` and `column` values.
+- `tandem::runtime::run_file(path)` runs an existing Lua file.
+- `tandem::runtime::run_source(source, chunk_name)` runs Lua source held in memory.
+- `tandem::runtime::RuntimeConfig` sets optional Lua memory and instruction limits.
+- `tandem::runtime::run_source_with_setup(...)` runs Lua after a host callback has installed additional Lua APIs.
+- `tandem::mlua` re-exports the `mlua` crate so hosts and the runtime use the same Lua types.
 
 ## Run a Lua file from Rust
 
 ```rust
 fn main() -> Result<(), String> {
-    typelua::runtime::run_file("script.lua")
+    tandem::runtime::run_file("script.lua")
 }
 ```
 
@@ -22,7 +22,7 @@ For a Lua script that needs command-line arguments, use `run_file_with_args`:
 
 ```rust
 fn main() -> Result<(), String> {
-    typelua::runtime::run_file_with_args(
+    tandem::runtime::run_file_with_args(
         "script.lua",
         &["first-arg".to_owned(), "second-arg".to_owned()],
     )
@@ -36,7 +36,7 @@ The runtime sets `arg[0]` to the chunk name or file path and puts supplied scrip
 Use `RuntimeConfig` with the `*_with_config` functions to bound embedded Lua execution:
 
 ```rust
-use typelua::runtime::{self, RuntimeConfig};
+use tandem::runtime::{self, RuntimeConfig};
 
 fn main() -> Result<(), String> {
     let config = RuntimeConfig {
@@ -54,7 +54,7 @@ fn main() -> Result<(), String> {
 `run_source_with_setup` calls a closure with the live `Lua` value before the chunk runs. The callback can install functions, tables, or globals, and must return `Result<(), String>`:
 
 ```rust
-use typelua::runtime::{self, RuntimeConfig};
+use tandem::runtime::{self, RuntimeConfig};
 
 fn main() -> Result<(), String> {
     runtime::run_source_with_setup(
@@ -88,15 +88,15 @@ fn main() -> Result<(), String> {
         greet("Lua");
     "#;
 
-    let lua_source = typelua::compiler::compile(source).map_err(|diagnostics| {
+    let lua_source = tandem::compiler::compile(source).map_err(|diagnostics| {
         diagnostics
             .iter()
             .map(|diagnostic| format!("{}: {}", diagnostic.severity.label(), diagnostic.message))
             .collect::<Vec<_>>()
             .join("\n")
     })?;
-    typelua::runtime::run_source(&lua_source, "generated.lua")
+    tandem::runtime::run_source(&lua_source, "generated.lua")
 }
 ```
 
-The CLI uses the same API: `.tlua` input is compiled to a `.lua` file and then run, while `.lua` input is executed directly. `--check` compiles for validation but does not invoke the runtime.
+The CLI uses the same API: `.tdm` input is compiled to a `.lua` file and then run, while `.lua` input is executed directly. `--check` compiles for validation but does not invoke the runtime.

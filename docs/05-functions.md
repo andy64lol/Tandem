@@ -4,7 +4,7 @@
 
 Declare functions with `fn`, typed parameters, and an optional return annotation:
 
-```tlua
+```tdm
 fn add(int a, int b) -> int {
     return a + b;
 }
@@ -20,7 +20,7 @@ If `-> type` is omitted, the return type defaults to `void`. A non-void function
 
 Default parameter values must be trailing; a required parameter after a defaulted one is rejected. Calls may omit trailing defaulted parameters. Generated Lua fills them when the parameter is `nil`:
 
-```tlua
+```tdm
 fn greet(str name = "world") -> void {
     print("Hello, " + name);
 }

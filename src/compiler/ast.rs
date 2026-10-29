@@ -125,7 +125,7 @@ pub(crate) struct ModuleExports {
 
 pub(crate) fn module_basename(path: &str) -> String {
     let last = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    last.strip_suffix(".tlua")
+    last.strip_suffix(".tdm")
         .or_else(|| last.strip_suffix(".lua"))
         .unwrap_or(last)
         .to_string()

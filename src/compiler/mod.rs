@@ -187,7 +187,7 @@ mod tests {
         assert!(lua.contains("local maxLives\n"));
         assert!(lua.contains("maxLives = 3"));
         assert!(lua.contains("function max_lives"));
-        assert!(lua.contains("do -- tlua:"));
+        assert!(lua.contains("do -- tdm:"));
         assert!(lua.contains("local temporary = max_lives()"));
         assert!(lua.contains("end\n"));
 
@@ -293,7 +293,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static TEST_DIR: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "typelua-test-{}",
+            "tandem-test-{}",
             TEST_DIR.fetch_add(1, Ordering::SeqCst)
         ));
         let _ = fs::remove_dir_all(&dir);
@@ -314,7 +314,7 @@ mod tests {
     fn requires_typed_modules() {
         let lua = with_modules(
             &[(
-                "greetings.tlua",
+                "greetings.tdm",
                 "fn hello(str name) -> str { return \"hi \" + name; }",
             )],
             "local greetings = require(\"greetings\");\nstr msg = greetings.hello(\"lua\");\nprint(msg);",
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn supports_lua_require_forms() {
         let files = &[(
-            "greetings.tlua",
+            "greetings.tdm",
             "fn hello(str name) -> str { return \"hi \" + name; }",
         )];
         let no_parens = with_modules(
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn require_statement_has_no_implicit_binding() {
         let diagnostics = with_modules(
-            &[("greetings.tlua", "fn hello() -> str { return \"hi\"; }")],
+            &[("greetings.tdm", "fn hello() -> str { return \"hi\"; }")],
             "require(\"greetings\");\nprint(greetings.hello());",
         )
         .unwrap_err();
@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn standalone_require_still_compiles_module() {
         let lua = with_modules(
-            &[("greetings.tlua", "fn hello() -> str { return \"hi\"; }")],
+            &[("greetings.tdm", "fn hello() -> str { return \"hi\"; }")],
             "require(\"greetings\");",
         )
         .unwrap();
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn module_assignment_form_declares_namespace() {
         let lua = with_modules(
-            &[("inspect.tlua", "fn show() -> void { print(\"x\"); }")],
+            &[("inspect.tdm", "fn show() -> void { print(\"x\"); }")],
             "inspect = require(\"inspect\");\ninspect.show();",
         )
         .unwrap();
@@ -380,7 +380,7 @@ mod tests {
     fn dotted_module_names_resolve_like_lua() {
         let lua = with_modules(
             &[(
-                "pkg/greetings.tlua",
+                "pkg/greetings.tdm",
                 "fn hello(str name) -> str { return \"hi \" + name; }",
             )],
             "local greetings = require(\"pkg.greetings\");\nprint(greetings.hello(\"lua\"));",
@@ -392,16 +392,16 @@ mod tests {
     #[test]
     fn slash_paths_with_explicit_extensions_resolve() {
         let files = &[(
-            "modules/greetings.tlua",
+            "modules/greetings.tdm",
             "fn hello(str name) -> str { return \"hi \" + name; }",
         )];
         let lua = with_modules(
             files,
-            "module greetings = require(\"modules/greetings.tlua\");\nprint(greetings.hello(\"lua\"));",
+            "module greetings = require(\"modules/greetings.tdm\");\nprint(greetings.hello(\"lua\"));",
         )
         .unwrap();
-        assert!(lua.contains("package.preload[\"modules/greetings.tlua\"]"));
-        assert!(lua.contains("greetings = require(\"modules/greetings.tlua\")"));
+        assert!(lua.contains("package.preload[\"modules/greetings.tdm\"]"));
+        assert!(lua.contains("greetings = require(\"modules/greetings.tdm\")"));
 
         let lua = with_modules(
             files,
@@ -415,13 +415,13 @@ mod tests {
     fn module_declarations_use_the_module_type() {
         let lua = with_modules(
             &[(
-                "greetings.tlua",
+                "greetings.tdm",
                 "fn hello(str name) -> str { return \"hi \" + name; }",
             )],
-            "module greetings = require(\"greetings.tlua\");\nprint(greetings.hello(\"lua\"));",
+            "module greetings = require(\"greetings.tdm\");\nprint(greetings.hello(\"lua\"));",
         )
         .unwrap();
-        assert!(lua.contains("greetings = require(\"greetings.tlua\")"));
+        assert!(lua.contains("greetings = require(\"greetings.tdm\")"));
     }
 
     #[test]
@@ -445,10 +445,10 @@ mod tests {
 
     #[test]
     fn missing_explicit_modules_error() {
-        let diagnostics = with_modules(&[], "module nope = require(\"nope.tlua\");").unwrap_err();
+        let diagnostics = with_modules(&[], "module nope = require(\"nope.tdm\");").unwrap_err();
         assert!(diagnostics
             .iter()
-            .any(|d| d.message.contains("cannot find module 'nope.tlua'")));
+            .any(|d| d.message.contains("cannot find module 'nope.tdm'")));
     }
 
     #[test]
@@ -919,7 +919,7 @@ mod tests {
         assert!(lua.contains("value = Drawing[k]"));
         assert!(lua.contains("item:name()"));
         assert!(lua.contains("item:render()"));
-        crate::runtime::run_source(&lua, "interfaces.tlua").unwrap();
+        crate::runtime::run_source(&lua, "interfaces.tdm").unwrap();
 
         assert!(error_message(
             "interface Drawable { fn draw() -> void; }\nclass Sprite implements Drawable {}"
@@ -959,7 +959,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        crate::runtime::run_source(&lua, "multiple-inheritance.tlua").unwrap();
+        crate::runtime::run_source(&lua, "multiple-inheritance.tdm").unwrap();
     }
 
     #[test]
@@ -986,7 +986,7 @@ mod tests {
         assert!(lua.contains("Counter.bump()"));
         assert!(lua.contains("Counter.value = Counter.value + 1"));
         assert!(lua.contains("function Counter:revealSecret()"));
-        crate::runtime::run_source(&lua, "static-private.tlua").unwrap();
+        crate::runtime::run_source(&lua, "static-private.tdm").unwrap();
         assert!(error_message(
             "class Counter { private int secret = 1; }\nlocal class c = new Counter;\nint x = c.secret;"
         )
@@ -1023,7 +1023,7 @@ mod tests {
         assert!(lua.contains("function Box:get()"));
         assert!(lua.contains("function Box:echo(other)"));
         assert!(lua.contains("box = wrap(copied)"));
-        crate::runtime::run_source(&lua, "generic-classes.tlua").unwrap();
+        crate::runtime::run_source(&lua, "generic-classes.tdm").unwrap();
         assert!(error_message(
             "class Box<T> { T value; constructor(T value) { self.value = value; } }\nlocal class b = new Box(1);"
         )
@@ -1049,12 +1049,12 @@ mod tests {
     }
 
     #[test]
-    fn compiles_transitive_tlua_modules() {
+    fn compiles_transitive_tdm_modules() {
         let lua = with_modules(
             &[
-                ("a.tlua", "fn name() -> str { return \"a\"; }"),
+                ("a.tdm", "fn name() -> str { return \"a\"; }"),
                 (
-                    "b.tlua",
+                    "b.tdm",
                     "local a = require(\"a\");\nfn name() -> str { return a.name() + \"b\"; }",
                 ),
             ],
@@ -1068,7 +1068,7 @@ mod tests {
     #[test]
     fn cyclic_imports_error() {
         let diagnostics = with_modules(
-            &[("a.tlua", "require(\"b\");"), ("b.tlua", "require(\"a\");")],
+            &[("a.tdm", "require(\"b\");"), ("b.tdm", "require(\"a\");")],
             "require(\"a\");",
         )
         .unwrap_err();

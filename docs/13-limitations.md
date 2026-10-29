@@ -1,6 +1,6 @@
 # 13. Limitations
 
-TypeLua 0.1.1 is a small proof of concept. The language does not currently implement:
+Tandem 0.1.1 is a small proof of concept. The language does not currently implement:
 
 - getters and setters, `instanceof`, class expressions, computed member names, abstract/final/protected access, or class exports from compiled modules;
 - fully static typing for `dict` values, and for generic `table` values that were not initialized with a literal;

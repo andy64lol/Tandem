@@ -1,0 +1,5 @@
+module greetings = require("greetings.tdm");
+module helper = require("lua-helper.lua");
+
+print(greetings.hello("Tandem"));
+print(helper.hello("Lua"));

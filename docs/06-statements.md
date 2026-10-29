@@ -6,7 +6,7 @@ Every statement ends in `;`. Blocks use braces. Declarations are covered in [Var
 
 Supported assignment operators are `=`, `+=`, `-=`, `*=`, and `/=`. Targets can be variables, struct or table fields, tuple element indexes, and dictionary or generic table indexes. Compound assignment requires a numeric target when the target type is known. A variable declared `const` cannot be reassigned. Dictionary fields can be updated, while lists can only be changed by replacing the whole list. Tuple values and elements can change only if the tuple keeps its original length and each position keeps its original type; a `const tuple` cannot be changed.
 
-```tlua
+```tdm
 int score = 0;
 score = 1;
 score += 1;
@@ -29,7 +29,7 @@ player.age = 16;
 
 An `if` statement takes a parenthesized condition and a block, with an optional `else` block. The condition must have type `bool`.
 
-```tlua
+```tdm
 if (count == 0) {
     count += 1;
 } else {
@@ -41,7 +41,7 @@ if (count == 0) {
 
 A `while` loop also requires a `bool` condition. A runtime-forever loop such as `while (true) { ... }` is accepted; a game host normally supplies its own frame loop instead.
 
-```tlua
+```tdm
 while (count < 5) {
     count += 1;
 }
@@ -51,7 +51,7 @@ while (count < 5) {
 
 Numeric `for` loops include their stop value. The forms are `for (name, stop)`, `for (name, start, stop)`, and `for (name, start, stop, step)`. The first form defaults to start `0` and step `1`; the second defaults to step `1`. All bounds and steps must be `int`. A negative step counts downward. The loop variable is an `int` scoped to the loop body.
 
-```tlua
+```tdm
 for (i, 10) {
     printf("Hello world! {i}");
 }
@@ -67,7 +67,7 @@ A void function may use `return;`. A non-void function must `return` a value of 
 
 An expression on its own is a statement, which is how function calls are written:
 
-```tlua
+```tdm
 movePlayer(20);
 print("Hello!");
 ```
@@ -76,7 +76,7 @@ print("Hello!");
 
 Braces can also create a standalone scope:
 
-```tlua
+```tdm
 {
     int temporary = 1;
     print(temporary);

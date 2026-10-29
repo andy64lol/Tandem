@@ -48,7 +48,7 @@ impl<'a> Loader<'a> {
             return Err(format!("cyclic import of module '{id}'"));
         }
         let file = match resolve(self.base, id) {
-            Some(ModuleFile::TypeLua(file)) => file,
+            Some(ModuleFile::Tandem(file)) => file,
             Some(ModuleFile::Lua) => {
                 self.insert_dynamic(id);
                 return Ok(());
@@ -99,12 +99,12 @@ impl<'a> Loader<'a> {
 }
 
 enum ModuleFile {
-    TypeLua(PathBuf),
+    Tandem(PathBuf),
     Lua,
 }
 
 fn is_explicit_path(id: &str) -> bool {
-    id.ends_with(".tlua")
+    id.ends_with(".tdm")
         || id.ends_with(".lua")
         || id.starts_with("./")
         || id.starts_with("../")
@@ -112,9 +112,9 @@ fn is_explicit_path(id: &str) -> bool {
 }
 
 fn resolve(dir: &Path, id: &str) -> Option<ModuleFile> {
-    if let Some(stem) = id.strip_suffix(".tlua") {
-        let file = with_suffix(&dir.join(stem), ".tlua");
-        return file.is_file().then_some(ModuleFile::TypeLua(file));
+    if let Some(stem) = id.strip_suffix(".tdm") {
+        let file = with_suffix(&dir.join(stem), ".tdm");
+        return file.is_file().then_some(ModuleFile::Tandem(file));
     }
     if let Some(stem) = id.strip_suffix(".lua") {
         let file = with_suffix(&dir.join(stem), ".lua");
@@ -131,17 +131,17 @@ fn resolve(dir: &Path, id: &str) -> Option<ModuleFile> {
 
 fn resolve_stem(dir: &Path, id: &str) -> Option<ModuleFile> {
     let base = dir.join(id);
-    let tlua = with_suffix(&base, ".tlua");
-    if tlua.is_file() {
-        return Some(ModuleFile::TypeLua(tlua));
+    let tdm = with_suffix(&base, ".tdm");
+    if tdm.is_file() {
+        return Some(ModuleFile::Tandem(tdm));
     }
     let lua = with_suffix(&base, ".lua");
     if lua.is_file() {
         return Some(ModuleFile::Lua);
     }
-    let tlua_init = base.join("init.tlua");
-    if tlua_init.is_file() {
-        return Some(ModuleFile::TypeLua(tlua_init));
+    let tdm_init = base.join("init.tdm");
+    if tdm_init.is_file() {
+        return Some(ModuleFile::Tandem(tdm_init));
     }
     let lua_init = base.join("init.lua");
     if lua_init.is_file() {

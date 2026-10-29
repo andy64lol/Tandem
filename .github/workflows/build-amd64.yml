@@ -1,4 +1,4 @@
-name: Build Linux AMD64
+name: Build Tandem Linux AMD64
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build AMD64 ELF
+    name: Build Tandem AMD64 ELF
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
@@ -28,7 +28,7 @@ jobs:
 
       - name: Verify ELF architecture
         run: |
-          executable="target/x86_64-unknown-linux-gnu/release/typelua"
+          executable="target/x86_64-unknown-linux-gnu/release/tandem"
           file "$executable"
           readelf -h "$executable" | grep -F "Advanced Micro Devices X86-64"
           test -x "$executable"
@@ -36,19 +36,19 @@ jobs:
       - name: Prepare executable
         id: package
         run: |
-          executable="target/x86_64-unknown-linux-gnu/release/typelua"
-          cp "$executable" typelua-x86_64
-          echo "executable=typelua-x86_64" >> "$GITHUB_OUTPUT"
+          executable="target/x86_64-unknown-linux-gnu/release/tandem"
+          cp "$executable" tandem-x86_64
+          echo "executable=tandem-x86_64" >> "$GITHUB_OUTPUT"
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: typelua-linux-x86_64
+          name: tandem-linux-x86_64
           path: ${{ steps.package.outputs.executable }}
           if-no-files-found: error
 
   package:
-    name: Package AMD64 Arch tarball
+    name: Package Tandem AMD64 tarball
     runs-on: ubuntu-24.04
     needs: build
     steps:
@@ -58,15 +58,15 @@ jobs:
       - name: Download executable
         uses: actions/download-artifact@v4
         with:
-          name: typelua-linux-x86_64
+          name: tandem-linux-x86_64
           path: dist
 
       - name: Build Arch tarball
-        run: make package-arch-binary BINARY_PATH=dist/typelua-x86_64 ARCH=x86_64
+        run: make package-arch-binary BINARY_PATH=dist/tandem-x86_64 ARCH=x86_64
 
       - name: Upload Arch tarball
         uses: actions/upload-artifact@v4
         with:
-          name: typelua-linux-x86_64-arch
+          name: tandem-linux-x86_64-arch
           path: dist/*.tar.gz
           if-no-files-found: error

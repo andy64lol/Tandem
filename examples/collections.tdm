@@ -17,7 +17,7 @@ int bobAge = ages.bob;
 table int str names = { "zero", "one" };
 str one = names[1];
 
-table config = { name = "typelua", retries = 2 };
+table config = { name = "tandem", retries = 2 };
 str configName = config.name;
 int retries = config.retries;
 

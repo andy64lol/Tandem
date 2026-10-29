@@ -4,7 +4,7 @@
 
 Declarations use `(local) (const) type name = value;`, where the parentheses mark optional modifiers. For example:
 
-```tlua
+```tdm
 int score = 0;
 float gravity = 9.8;
 bool alive = true;
@@ -18,22 +18,22 @@ tuple position = (0, 10, 11);
 
 Every declaration needs an initializer, and the initializer must have the declared type. Reassignments are checked against the variable's current type. To deliberately change that type, annotate the new value with `as type`:
 
-```tlua
+```tdm
 int name = 0;
 name = "Hello!" as str;
-name = "TypeLua"; // now a str
+name = "Tandem"; // now a str
 // name = 1;      // error: name is now a str
 ```
 
 Class instances use the special `class` declaration form: `class Player = new player;`, optionally with `local` or `const`. The class from the `new` expression supplies the static type. See [Classes](12-classes.md).
 
-The one exception to the type rule is a module binding: `module greetings = require("greetings.tlua");` and `local greetings = require("greetings.tlua");` infer the module type from `require`. See [Getting started](02-getting-started.md#split-a-program-across-files) for module imports.
+The one exception to the type rule is a module binding: `module greetings = require("greetings.tdm");` and `local greetings = require("greetings.tdm");` infer the module type from `require`. See [Getting started](02-getting-started.md#split-a-program-across-files) for module imports.
 
 ### Automatic type inference
 
 The `auto` type infers a variable's type from its initializer and then locks it, so later assignments behave as if the inferred type had been written explicitly:
 
-```tlua
+```tdm
 auto lives = 3;        // inferred as int
 lives += 1;
 // lives = "three" as str; // error: cannot change the type of 'auto' variable 'lives'
@@ -51,7 +51,7 @@ A variable cannot be declared with type `void`.
 
 `list`, `dict`, and `tuple` declarations may repeat an existing collection name in the same scope to replace its value. Lists keep their declared element type. Tuples keep the length and type at each position inferred by the first declaration. Dictionaries keep the `dict` type and may contain named fields with different value types. These redefinitions are allowed only for mutable variables. A mutable variable cannot be made `const` by a later declaration.
 
-```tlua
+```tdm
 tuple position = (0, 10, 11);
 tuple position = (10, 20, 30); // valid
 // tuple position = ("Hello", 10); // error: wrong length and first element type
@@ -66,25 +66,25 @@ The `local` and `const` modifiers are optional, shown here as `(local)` and `(co
 
 ### local
 
-Inside functions and blocks, declarations become Lua locals whether or not `local` is written. At top level, declarations become Lua globals unless marked `local`; top-level locals are visible to functions in the same TypeLua file. In generated Lua, top-level `local` names are hoisted to the top of the chunk.
+Inside functions and blocks, declarations become Lua locals whether or not `local` is written. At top level, declarations become Lua globals unless marked `local`; top-level locals are visible to functions in the same Tandem file. In generated Lua, top-level `local` names are hoisted to the top of the chunk.
 
 ### const
 
-A `const` binding can be read like any other variable, but TypeLua rejects assignments to it, including compound assignments:
+A `const` binding can be read like any other variable, but Tandem rejects assignments to it, including compound assignments:
 
-```tlua
+```tdm
 const int maxLives = 3;
 maxLives = 4;    // error: cannot assign to constant 'maxLives'
 maxLives += 1;   // error
 ```
 
-Its initializer must match its declared type. Constness is checked by the TypeLua compiler and is erased in generated Lua. A `const tuple` also locks its elements. Declaring an already mutable collection with `const` is an error.
+Its initializer must match its declared type. Constness is checked by the Tandem compiler and is erased in generated Lua. A `const tuple` also locks its elements. Declaring an already mutable collection with `const` is an error.
 
 ## Scope
 
 A declaration is visible from its statement to the end of the enclosing block. Duplicate names in the same scope are rejected except for the collection redefinitions described above. An inner block may shadow a name from an outer scope. Braces create scopes: function bodies, `if` and `while` bodies, `for` bodies, and standalone blocks (see [Statements](06-statements.md)).
 
-```tlua
+```tdm
 {
     int temporary = 1;
     print(temporary);
