@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::compiler::ast::{
-    module_basename, parse_printf_format, retyped_global_names, Export, Expr, FnSig, FormatPart,
-    Fun, ListElement, ModuleExports, Param, Stmt, StmtKind, StructDef, TableShape, Top, Ty,
+    module_basename, parse_printf_format, retyped_global_names, substitute_type, Export, Expr,
+    FnSig, FormatPart, Fun, InterfaceDef, ListElement, ModuleExports, Param, Stmt, StmtKind,
+    StructDef, TableShape, Top, Ty,
 };
 use crate::compiler::stdlib;
 
@@ -16,13 +17,86 @@ struct Binding {
 type Structs = HashMap<String, HashMap<String, Ty>>;
 type Classes = HashMap<String, ClassInfo>;
 
+fn infer_generic_bindings(
+    expected: &Ty,
+    actual: &Ty,
+    generic: &[String],
+    bindings: &mut HashMap<String, Ty>,
+) -> Result<(), String> {
+    match expected {
+        Ty::Generic(name) if generic.contains(name) => {
+            if let Some(previous) = bindings.get(name) {
+                if previous != actual {
+                    return Err(format!(
+                        "generic type '{name}' is used with incompatible types {previous:?} and {actual:?}"
+                    ));
+                }
+            } else {
+                bindings.insert(name.clone(), actual.clone());
+            }
+        }
+        Ty::List(expected) => {
+            if let Ty::List(actual) = actual {
+                infer_generic_bindings(expected, actual, generic, bindings)?;
+            }
+        }
+        Ty::Map(expected_key, expected_value) => {
+            if let Ty::Map(actual_key, actual_value) = actual {
+                infer_generic_bindings(expected_key, actual_key, generic, bindings)?;
+                infer_generic_bindings(expected_value, actual_value, generic, bindings)?;
+            }
+        }
+        Ty::Tuple(Some(expected)) => {
+            if let Ty::Tuple(Some(actual)) = actual {
+                if expected.len() == actual.len() {
+                    for (expected, actual) in expected.iter().zip(actual) {
+                        infer_generic_bindings(expected, actual, generic, bindings)?;
+                    }
+                }
+            }
+        }
+        Ty::Applied(expected_name, expected_args) => {
+            if let Ty::Applied(actual_name, actual_args) = actual {
+                if expected_name == actual_name && expected_args.len() == actual_args.len() {
+                    for (expected, actual) in expected_args.iter().zip(actual_args) {
+                        infer_generic_bindings(expected, actual, generic, bindings)?;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn mentions_unbound_generic(ty: &Ty, generic: &[String], bindings: &HashMap<String, Ty>) -> bool {
+    match ty {
+        Ty::Generic(name) => generic.contains(name) && !bindings.contains_key(name),
+        Ty::List(element) => mentions_unbound_generic(element, generic, bindings),
+        Ty::Map(key, value) => {
+            mentions_unbound_generic(key, generic, bindings)
+                || mentions_unbound_generic(value, generic, bindings)
+        }
+        Ty::Tuple(Some(elements)) | Ty::Applied(_, elements) => elements
+            .iter()
+            .any(|element| mentions_unbound_generic(element, generic, bindings)),
+        _ => false,
+    }
+}
+
 #[derive(Clone)]
 struct ClassInfo {
-    parent: Option<String>,
+    parents: Vec<String>,
+    interfaces: Vec<String>,
+    generic: Vec<String>,
     own_fields: HashMap<String, Ty>,
     fields: HashMap<String, Ty>,
     methods: HashMap<String, FnSig>,
     constructor: Option<FnSig>,
+    static_fields: HashMap<String, Ty>,
+    static_methods: HashMap<String, FnSig>,
+    private_fields: HashSet<String>,
+    private_methods: HashSet<String>,
     line: usize,
     column: usize,
 }
@@ -33,11 +107,13 @@ struct Checker {
     modules: HashMap<String, ModuleExports>,
     structs: Structs,
     classes: Classes,
+    interfaces: HashMap<String, InterfaceDef>,
     current_class: Option<String>,
     unstable_globals: HashSet<String>,
     imports: HashSet<String>,
     function_depth: usize,
     current_constructor: bool,
+    current_static: bool,
     allow_super_call: bool,
     position: Option<(usize, usize)>,
 }
@@ -46,6 +122,7 @@ impl Checker {
         modules: HashMap<String, ModuleExports>,
         structs: Structs,
         classes: Classes,
+        interfaces: HashMap<String, InterfaceDef>,
         unstable_globals: HashSet<String>,
         imports: HashSet<String>,
     ) -> Self {
@@ -55,11 +132,13 @@ impl Checker {
             modules,
             structs,
             classes,
+            interfaces,
             current_class: None,
             unstable_globals,
             imports,
             function_depth: 0,
             current_constructor: false,
+            current_static: false,
             allow_super_call: false,
             position: None,
         }
@@ -130,36 +209,96 @@ impl Checker {
                 args.len()
             ));
         }
+        let mut generic_bindings = HashMap::new();
         for (index, arg) in args.iter().enumerate() {
             let Some(expected) = signature.args.get(index) else {
                 self.expr(arg)?;
                 continue;
             };
-            let got = self.expr_as(arg, expected)?;
-            if expected != &Ty::Any && &got != expected {
+            let actual = self.expr(arg)?;
+            infer_generic_bindings(expected, &actual, &signature.generic, &mut generic_bindings)?;
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let Some(expected) = signature.args.get(index) else {
+                continue;
+            };
+            let expected = substitute_type(expected, &generic_bindings);
+            if mentions_unbound_generic(&expected, &signature.generic, &generic_bindings) {
+                return Err(format!(
+                    "cannot infer generic type for argument {} to '{label}'",
+                    index + 1
+                ));
+            }
+            let got = self.expr_as(arg, &expected)?;
+            if expected != Ty::Any && got != expected {
                 return Err(format!(
                     "argument to '{label}' expects {expected:?}, got {got:?}"
                 ));
             }
         }
-        Ok(signature.ret.clone())
+        let ret = substitute_type(&signature.ret, &generic_bindings);
+        if mentions_unbound_generic(&ret, &signature.generic, &generic_bindings) {
+            return Err(format!("cannot infer generic return type for '{label}'"));
+        }
+        Ok(ret)
     }
     fn member_type(&self, base: &Expr, name: &str) -> Result<Ty, String> {
         if let Some(shape) = self.table_shape_of(base) {
             return Ok(shape.named.get(name).cloned().unwrap_or(Ty::Any));
         }
         match self.expr(base)? {
-            Ty::Struct(struct_name) => {
+            Ty::Class(class_name) => {
+                if let Some(owner) = self.private_member_owner(&class_name, name) {
+                    if !self.member_accessible(&owner) {
+                        return Err(format!("field '{name}' of class '{owner}' is private"));
+                    }
+                }
+                if let Some(ty) = self.class_static_field(&class_name, name) {
+                    return Ok(ty);
+                }
+                if self.class_static_method(&class_name, name).is_some() {
+                    return Err(format!(
+                        "static method '{class_name}.{name}' must be called"
+                    ));
+                }
+                Err(format!("class '{class_name}' has no static field '{name}'"))
+            }
+            ty @ (Ty::Struct(_) | Ty::Applied(_, _)) => {
+                let struct_name = match &ty {
+                    Ty::Struct(name) | Ty::Applied(name, _) => name.clone(),
+                    _ => unreachable!(),
+                };
+                if let Some(ty) = self.class_static_field(&struct_name, name) {
+                    if let Some(owner) = self.private_member_owner(&struct_name, name) {
+                        if !self.member_accessible(&owner) {
+                            return Err(format!("field '{name}' of class '{owner}' is private"));
+                        }
+                    }
+                    return Ok(ty);
+                }
                 if let Some(field) = self
                     .structs
                     .get(&struct_name)
                     .and_then(|fields| fields.get(name))
                 {
-                    return Ok(field.clone());
+                    if let Some(owner) = self.private_member_owner(&struct_name, name) {
+                        if !self.member_accessible(&owner) {
+                            return Err(format!("field '{name}' of class '{owner}' is private"));
+                        }
+                    }
+                    return Ok(substitute_type(
+                        &field,
+                        &self.class_bindings(&struct_name, &ty),
+                    ));
                 }
-                if class_method(&self.classes, &struct_name, name).is_some() {
+                if self.class_method(&struct_name, name).is_some() {
                     return Err(format!(
                         "class '{struct_name}' has method '{name}'; call it with '{name}(...)'"
+                    ));
+                }
+                if self.interface_method(&struct_name, name).is_some() {
+                    return Err(format!(
+                        "interface '{struct_name}' has method '{name}'; call it with '{name}(...)'"
                     ));
                 }
                 Err(format!("struct '{struct_name}' has no field '{name}'"))
@@ -190,17 +329,27 @@ impl Checker {
         }
     }
     fn is_subclass(&self, child: &str, parent: &str) -> bool {
-        let mut current = Some(child);
-        while let Some(name) = current {
-            if name == parent {
+        fn visit(
+            classes: &Classes,
+            child: &str,
+            parent: &str,
+            visited: &mut HashSet<String>,
+        ) -> bool {
+            if child == parent {
                 return true;
             }
-            current = self
-                .classes
-                .get(name)
-                .and_then(|class| class.parent.as_deref());
+            if !visited.insert(child.to_owned()) {
+                return false;
+            }
+            classes.get(child).is_some_and(|class| {
+                class
+                    .parents
+                    .iter()
+                    .filter(|name| classes.contains_key(name.as_str()))
+                    .any(|name| visit(classes, name, parent, visited))
+            })
         }
-        false
+        visit(&self.classes, child, parent, &mut HashSet::new())
     }
     fn accepts(&self, expected: &Ty, got: &Ty) -> bool {
         expected == got
@@ -210,21 +359,169 @@ impl Checker {
                 {
                     self.is_subclass(child, parent)
                 }
+                (Ty::Struct(interface), Ty::Struct(class_name))
+                    if self.interfaces.contains_key(interface)
+                        && self.classes.contains_key(class_name) =>
+                {
+                    self.implements(class_name, interface)
+                }
+                (Ty::Applied(parent, expected_args), Ty::Applied(child, got_args))
+                    if parent == child =>
+                {
+                    expected_args == got_args
+                }
+                (Ty::Struct(parent), Ty::Applied(child, _))
+                    if self.classes.contains_key(parent) && self.classes.contains_key(child) =>
+                {
+                    self.is_subclass(child, parent)
+                }
+                (Ty::Struct(interface), Ty::Applied(class_name, _))
+                    if self.interfaces.contains_key(interface)
+                        && self.classes.contains_key(class_name) =>
+                {
+                    self.implements(class_name, interface)
+                }
                 _ => false,
             }
     }
+    fn implements(&self, class_name: &str, interface: &str) -> bool {
+        let Some(definition) = self.interfaces.get(interface) else {
+            return false;
+        };
+        let Some(class) = self.classes.get(class_name) else {
+            return false;
+        };
+        let declared = class
+            .interfaces
+            .iter()
+            .any(|name| self.interface_is_a(name, interface))
+            || class.parents.iter().any(|name| {
+                self.interfaces.contains_key(name) && self.interface_is_a(name, interface)
+            })
+            || class.parents.iter().any(|parent| {
+                self.classes.contains_key(parent) && self.implements(parent, interface)
+            });
+        if !declared {
+            return false;
+        }
+        for parent in &definition.parents {
+            if !self.interfaces.contains_key(parent) || !self.implements(class_name, parent) {
+                return false;
+            }
+        }
+        for method in &definition.methods {
+            let method_signature = signature(&method.params, method.ret.clone());
+            if self
+                .private_member_owner(class_name, &method.name)
+                .is_some()
+            {
+                return false;
+            }
+            let Some(implemented) = self.class_method(class_name, &method.name) else {
+                return false;
+            };
+            if !signatures_match(implemented, &method_signature) {
+                return false;
+            }
+        }
+        true
+    }
+    fn interface_is_a(&self, child: &str, parent: &str) -> bool {
+        fn visit(
+            interfaces: &HashMap<String, InterfaceDef>,
+            child: &str,
+            parent: &str,
+            visited: &mut HashSet<String>,
+        ) -> bool {
+            if child == parent {
+                return true;
+            }
+            if !visited.insert(child.to_owned()) {
+                return false;
+            }
+            interfaces.get(child).is_some_and(|interface| {
+                interface
+                    .parents
+                    .iter()
+                    .any(|base| visit(interfaces, base, parent, visited))
+            })
+        }
+        visit(&self.interfaces, child, parent, &mut HashSet::new())
+    }
+    fn interface_method(&self, interface: &str, method: &str) -> Option<FnSig> {
+        fn find(
+            interfaces: &HashMap<String, InterfaceDef>,
+            interface: &str,
+            method: &str,
+            visited: &mut HashSet<String>,
+        ) -> Option<FnSig> {
+            if !visited.insert(interface.to_owned()) {
+                return None;
+            }
+            let definition = interfaces.get(interface)?;
+            definition
+                .methods
+                .iter()
+                .find(|candidate| candidate.name == method)
+                .map(|candidate| signature(&candidate.params, candidate.ret.clone()))
+                .or_else(|| {
+                    definition
+                        .parents
+                        .iter()
+                        .find_map(|parent| find(interfaces, parent, method, visited))
+                })
+        }
+        find(&self.interfaces, interface, method, &mut HashSet::new())
+    }
     fn class_of(&self, base: &Expr) -> Option<String> {
         match self.expr(base).ok()? {
-            Ty::Struct(name) if self.classes.contains_key(&name) => Some(name),
+            Ty::Struct(name) | Ty::Applied(name, _) if self.classes.contains_key(&name) => {
+                Some(name)
+            }
             _ => None,
         }
     }
     fn method_return(&self, base: &Expr, name: &str, args: &[Expr]) -> Result<Ty, String> {
+        if let Ty::Class(class_name) = self.expr(base)? {
+            if let Some(owner) = self.private_member_owner(&class_name, name) {
+                if !self.member_accessible(&owner) {
+                    return Err(format!("method '{name}' of class '{owner}' is private"));
+                }
+            }
+            if let Some(signature) = self.class_static_method(&class_name, name) {
+                return self.check_signature_call(
+                    &format!("{class_name}.{name}"),
+                    &signature,
+                    args,
+                );
+            }
+            return Err(format!(
+                "class '{class_name}' has no static method '{name}'"
+            ));
+        }
         if let Some(class_name) = self.class_of(base) {
-            let Some(signature) = class_method(&self.classes, &class_name, name) else {
+            if let Some(signature) = self.class_static_method(&class_name, name) {
+                return self.check_signature_call(
+                    &format!("{class_name}.{name}"),
+                    &signature,
+                    args,
+                );
+            }
+            if let Some(owner) = self.private_member_owner(&class_name, name) {
+                if !self.member_accessible(&owner) {
+                    return Err(format!("method '{name}' of class '{owner}' is private"));
+                }
+            }
+            let base_ty = self.expr(base)?;
+            let Some(signature) = self.class_method_signature(&class_name, &base_ty, name) else {
                 return Err(format!("class '{class_name}' has no method '{name}'"));
             };
-            return self.check_signature_call(&format!("{class_name}.{name}"), signature, args);
+            return self.check_signature_call(&format!("{class_name}.{name}"), &signature, args);
+        }
+        if let Ty::Struct(interface) = self.expr(base)? {
+            if let Some(signature) = self.interface_method(&interface, name) {
+                return self.check_signature_call(&format!("{interface}.{name}"), &signature, args);
+            }
         }
         let (exports, namespace) = self.module_exports(base)?;
         if exports.dynamic {
@@ -248,6 +545,295 @@ impl Checker {
             None => Err(format!("module has no member '{name}'")),
         }
     }
+    fn class_static_field(&self, class_name: &str, field: &str) -> Option<Ty> {
+        let class = self.classes.get(class_name)?;
+        class.static_fields.get(field).cloned().or_else(|| {
+            class.parents.iter().find_map(|parent| {
+                self.classes
+                    .contains_key(parent)
+                    .then(|| self.class_static_field(parent, field))
+                    .flatten()
+            })
+        })
+    }
+    fn class_static_method(&self, class_name: &str, method: &str) -> Option<FnSig> {
+        let class = self.classes.get(class_name)?;
+        class.static_methods.get(method).cloned().or_else(|| {
+            class.parents.iter().find_map(|parent| {
+                self.classes
+                    .contains_key(parent)
+                    .then(|| self.class_static_method(parent, method))
+                    .flatten()
+            })
+        })
+    }
+    fn private_member_owner(&self, class_name: &str, member: &str) -> Option<String> {
+        fn find(
+            classes: &Classes,
+            class_name: &str,
+            member: &str,
+            visited: &mut HashSet<String>,
+        ) -> Option<String> {
+            if !visited.insert(class_name.to_owned()) {
+                return None;
+            }
+            let class = classes.get(class_name)?;
+            if class.private_fields.contains(member) || class.private_methods.contains(member) {
+                return Some(class_name.to_owned());
+            }
+            class.parents.iter().find_map(|parent| {
+                classes
+                    .contains_key(parent)
+                    .then(|| find(classes, parent, member, visited))
+                    .flatten()
+            })
+        }
+        find(&self.classes, class_name, member, &mut HashSet::new())
+    }
+    fn member_accessible(&self, class_name: &str) -> bool {
+        self.current_class.as_deref() == Some(class_name)
+    }
+    fn check_implicit_private_access(&self, member: &str) -> Result<(), String> {
+        if let Some(current) = self.current_class.as_deref() {
+            if let Some(owner) = self.private_member_owner(current, member) {
+                if owner != current {
+                    return Err(format!("member '{member}' of class '{owner}' is private"));
+                }
+            }
+        }
+        Ok(())
+    }
+    fn class_method(&self, class_name: &str, method: &str) -> Option<&FnSig> {
+        fn find<'a>(
+            classes: &'a Classes,
+            class_name: &str,
+            method: &str,
+            visited: &mut HashSet<String>,
+        ) -> Option<&'a FnSig> {
+            if !visited.insert(class_name.to_owned()) {
+                return None;
+            }
+            let class = classes.get(class_name)?;
+            class.methods.get(method).or_else(|| {
+                class.parents.iter().find_map(|parent| {
+                    classes
+                        .contains_key(parent)
+                        .then(|| find(classes, parent, method, visited))
+                        .flatten()
+                })
+            })
+        }
+        find(&self.classes, class_name, method, &mut HashSet::new())
+    }
+    fn class_method_signature(&self, class_name: &str, ty: &Ty, method: &str) -> Option<FnSig> {
+        fn find(
+            classes: &Classes,
+            class_name: &str,
+            method: &str,
+            bindings: &HashMap<String, Ty>,
+            visited: &mut HashSet<String>,
+        ) -> Option<FnSig> {
+            if !visited.insert(class_name.to_owned()) {
+                return None;
+            }
+            let class = classes.get(class_name)?;
+            if let Some(signature) = class.methods.get(method) {
+                let mut signature = signature.clone();
+                signature.args = signature
+                    .args
+                    .iter()
+                    .map(|ty| substitute_type(ty, bindings))
+                    .collect();
+                signature.ret = substitute_type(&signature.ret, bindings);
+                signature
+                    .generic
+                    .retain(|name| !bindings.contains_key(name));
+                return Some(signature);
+            }
+            for parent in &class.parents {
+                let Some(parent_class) = classes.get(parent) else {
+                    continue;
+                };
+                let parent_bindings = parent_class
+                    .generic
+                    .iter()
+                    .zip(&class.generic)
+                    .map(|(parent, child)| {
+                        (
+                            parent.clone(),
+                            substitute_type(&Ty::Generic(child.clone()), bindings),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                if let Some(signature) = find(classes, parent, method, &parent_bindings, visited) {
+                    return Some(signature);
+                }
+            }
+            None
+        }
+        find(
+            &self.classes,
+            class_name,
+            method,
+            &self.class_bindings(class_name, ty),
+            &mut HashSet::new(),
+        )
+    }
+    fn class_bindings(&self, class_name: &str, ty: &Ty) -> HashMap<String, Ty> {
+        let Some(class) = self.classes.get(class_name) else {
+            return HashMap::new();
+        };
+        let Ty::Applied(_, arguments) = ty else {
+            return HashMap::new();
+        };
+        class
+            .generic
+            .iter()
+            .cloned()
+            .zip(arguments.iter().cloned())
+            .collect()
+    }
+    fn instantiate_class_signature(&self, class_name: &str, ty: &Ty, signature: &FnSig) -> FnSig {
+        let bindings = self.class_bindings(class_name, ty);
+        let mut signature = signature.clone();
+        signature.args = signature
+            .args
+            .iter()
+            .map(|ty| substitute_type(ty, &bindings))
+            .collect();
+        signature.ret = substitute_type(&signature.ret, &bindings);
+        signature
+            .generic
+            .retain(|name| !bindings.contains_key(name));
+        signature
+    }
+    fn first_class_parent(&self, class_name: &str) -> Option<&str> {
+        self.classes
+            .get(class_name)?
+            .parents
+            .iter()
+            .find_map(|parent| self.classes.contains_key(parent).then_some(parent.as_str()))
+    }
+    fn generic_instance_type(&self, class_name: &str) -> Ty {
+        self.classes.get(class_name).map_or_else(
+            || Ty::Struct(class_name.to_owned()),
+            |class| {
+                if class.generic.is_empty() {
+                    Ty::Struct(class_name.to_owned())
+                } else {
+                    Ty::Applied(
+                        class_name.to_owned(),
+                        class.generic.iter().cloned().map(Ty::Generic).collect(),
+                    )
+                }
+            },
+        )
+    }
+    fn parent_instance_type(&self, child: &str, parent: &str) -> Ty {
+        let (Some(child_class), Some(parent_class)) =
+            (self.classes.get(child), self.classes.get(parent))
+        else {
+            return Ty::Struct(parent.to_owned());
+        };
+        if parent_class.generic.is_empty() {
+            Ty::Struct(parent.to_owned())
+        } else {
+            Ty::Applied(
+                parent.to_owned(),
+                parent_class
+                    .generic
+                    .iter()
+                    .zip(&child_class.generic)
+                    .map(|(_, child)| Ty::Generic(child.clone()))
+                    .collect(),
+            )
+        }
+    }
+    fn adapt_parent_signature(&self, child: &str, parent: &str, signature: &FnSig) -> FnSig {
+        let (Some(child_class), Some(parent_class)) =
+            (self.classes.get(child), self.classes.get(parent))
+        else {
+            return signature.clone();
+        };
+        let parent_bindings = parent_class
+            .generic
+            .iter()
+            .zip(&child_class.generic)
+            .map(|(parent, child)| (parent.clone(), Ty::Generic(child.clone())))
+            .collect::<HashMap<_, _>>();
+        let mut signature = signature.clone();
+        signature.args = signature
+            .args
+            .iter()
+            .map(|ty| substitute_type(ty, &parent_bindings))
+            .collect();
+        signature.ret = substitute_type(&signature.ret, &parent_bindings);
+        signature.generic = child_class
+            .generic
+            .iter()
+            .cloned()
+            .chain(
+                signature
+                    .generic
+                    .into_iter()
+                    .filter(|name| !parent_class.generic.contains(name)),
+            )
+            .collect();
+        signature
+    }
+    fn check_new(
+        &self,
+        name: &str,
+        type_args: &[Ty],
+        args: &[Expr],
+        explicit_type_args: bool,
+    ) -> Result<Ty, String> {
+        if self.lookup(name).is_some() {
+            return Err(format!(
+                "class '{name}' is shadowed by a variable with the same name"
+            ));
+        }
+        let Some(class) = self.classes.get(name) else {
+            return Err(format!("unknown class '{name}'"));
+        };
+        if class.generic.len() != type_args.len() {
+            let expected = class.generic.len();
+            if expected == 0 && !type_args.is_empty() {
+                return Err(format!("class '{name}' is not generic"));
+            }
+            return Err(format!(
+                "class '{name}' expects {expected} type arguments, got {}",
+                type_args.len()
+            ));
+        }
+        if !explicit_type_args && !class.generic.is_empty() {
+            return Err(format!(
+                "class '{name}' requires type arguments, for example 'new {name}<int>'"
+            ));
+        }
+        for ty in type_args {
+            validate_type(ty, &self.structs, &self.classes, &self.interfaces)?;
+        }
+        let instance_ty = if class.generic.is_empty() {
+            Ty::Struct(name.to_owned())
+        } else {
+            Ty::Applied(name.to_owned(), type_args.to_vec())
+        };
+        let mut constructor = class.constructor.clone();
+        if constructor.is_none() {
+            if let Some(parent) = self.first_class_parent(name) {
+                let inherited = effective_constructor(&self.classes, parent);
+                constructor = Some(self.adapt_parent_signature(name, parent, &inherited));
+            }
+        }
+        let constructor = self.instantiate_class_signature(
+            name,
+            &instance_ty,
+            &constructor.unwrap_or_else(empty_signature),
+        );
+        self.check_signature_call(&format!("{name}.constructor"), &constructor, args)?;
+        Ok(instance_ty)
+    }
     fn push(&mut self) {
         self.scopes.push(HashMap::new());
     }
@@ -262,6 +848,9 @@ impl Checker {
             .cloned()
     }
     fn implicit_field(&self, name: &str) -> Option<Ty> {
+        if self.current_static {
+            return None;
+        }
         if matches!(self.lookup_scope(name), Some(scope) if scope > 0) {
             return None;
         }
@@ -411,6 +1000,7 @@ impl Checker {
             Expr::Unary(_, value) => Self::contains_cast(value),
             Expr::Bin(left, _, right) => Self::contains_cast(left) || Self::contains_cast(right),
             Expr::Call(_, args) | Expr::New(_, args) => args.iter().any(Self::contains_cast),
+            Expr::NewTyped(_, _, args) => args.iter().any(Self::contains_cast),
             Expr::MethodCall(base, _, args) => {
                 Self::contains_cast(base) || args.iter().any(Self::contains_cast)
             }
@@ -536,7 +1126,7 @@ impl Checker {
         }
         if let Expr::Table(fields) = e {
             match expected {
-                Ty::Struct(name) => {
+                Ty::Struct(name) | Ty::Applied(name, _) => {
                     if self.classes.contains_key(name) {
                         return Err(format!(
                             "class '{name}' must be constructed with 'new {name}'"
@@ -695,11 +1285,15 @@ impl Checker {
             Expr::Str(_) => Ok(Ty::Str),
             Expr::Bool(_) => Ok(Ty::Bool),
             Expr::Var(n) => {
+                self.check_implicit_private_access(n)?;
                 if let Some(ty) = self.implicit_field(n) {
                     return Ok(ty);
                 }
                 if let Some(binding) = self.lookup(n) {
                     return Ok(binding.ty);
+                }
+                if self.classes.contains_key(n) {
+                    return Ok(Ty::Class(n.clone()));
                 }
                 if stdlib::package(n).is_some() || n == "base" {
                     if self.imports.contains(n) {
@@ -752,7 +1346,7 @@ impl Checker {
                 if *ty == Ty::Void {
                     return Err("cannot cast to 'void'".into());
                 }
-                validate_type(ty, &self.structs)?;
+                validate_type(ty, &self.structs, &self.classes, &self.interfaces)?;
                 let source_ty = self.expr(value)?;
                 if source_ty != Ty::Any && source_ty != *ty {
                     return Err(format!("cannot cast {source_ty:?} to {ty:?}"));
@@ -871,28 +1465,8 @@ impl Checker {
                 }
                 Ok(Ty::Tuple(Some(types)))
             }
-            Expr::New(name, args) => {
-                if self.lookup(name).is_some() {
-                    return Err(format!(
-                        "class '{name}' is shadowed by a variable with the same name"
-                    ));
-                }
-                let Some(class) = self.classes.get(name) else {
-                    return Err(format!("unknown class '{name}'"));
-                };
-                let constructor = class
-                    .constructor
-                    .clone()
-                    .or_else(|| {
-                        class
-                            .parent
-                            .as_ref()
-                            .map(|parent| effective_constructor(&self.classes, parent))
-                    })
-                    .unwrap_or_else(empty_signature);
-                self.check_signature_call(&format!("{name}.constructor"), &constructor, args)?;
-                Ok(Ty::Struct(name.clone()))
-            }
+            Expr::New(name, args) => self.check_new(name, &[], args, false),
+            Expr::NewTyped(name, type_args, args) => self.check_new(name, type_args, args, true),
             Expr::SuperCall(args) => {
                 let Some(class_name) = self.current_class.clone() else {
                     return Err("'super(...)' can only be used inside a class".into());
@@ -900,7 +1474,10 @@ impl Checker {
                 if !self.current_constructor {
                     return Err("'super(...)' can only be called from a constructor".into());
                 }
-                let Some(parent) = self.classes[&class_name].parent.clone() else {
+                if self.current_static {
+                    return Err("'super(...)' cannot be used in a static method".into());
+                }
+                let Some(parent) = self.first_class_parent(&class_name).map(str::to_owned) else {
                     return Err(format!(
                         "class '{class_name}' has no base class to call with 'super(...)'"
                     ));
@@ -911,6 +1488,12 @@ impl Checker {
                     );
                 }
                 let constructor = effective_constructor(&self.classes, &parent);
+                let constructor = self.adapt_parent_signature(&class_name, &parent, &constructor);
+                let constructor = self.instantiate_class_signature(
+                    &class_name,
+                    &self.generic_instance_type(&class_name),
+                    &constructor,
+                );
                 self.check_signature_call(&format!("{parent}.constructor"), &constructor, args)?;
                 Ok(Ty::Void)
             }
@@ -920,15 +1503,27 @@ impl Checker {
                         "'super.{name}(...)' can only be used inside a class"
                     ));
                 };
-                let Some(parent) = self.classes[&class_name].parent.clone() else {
+                if self.current_static {
+                    return Err(format!(
+                        "'super.{name}(...)' cannot be used in a static method"
+                    ));
+                }
+                let Some(parent) = self.first_class_parent(&class_name).map(str::to_owned) else {
                     return Err(format!(
                         "class '{class_name}' has no base class to call with 'super.{name}(...)'"
                     ));
                 };
-                let Some(signature) = class_method(&self.classes, &parent, name) else {
+                if let Some(owner) = self.private_member_owner(&parent, name) {
+                    if !self.member_accessible(&owner) {
+                        return Err(format!("method '{name}' of class '{owner}' is private"));
+                    }
+                }
+                let parent_type = self.parent_instance_type(&class_name, &parent);
+                let Some(signature) = self.class_method_signature(&parent, &parent_type, name)
+                else {
                     return Err(format!("class '{parent}' has no method '{name}'"));
                 };
-                self.check_signature_call(&format!("{parent}.{name}"), signature, args)
+                self.check_signature_call(&format!("{parent}.{name}"), &signature, args)
             }
             Expr::Call(n, args) => {
                 if n == "require" {
@@ -960,21 +1555,7 @@ impl Checker {
                     return Ok(Ty::Void);
                 }
                 if let Some(f) = self.funcs.get(n) {
-                    if args.len() < f.required || (!f.varargs && args.len() > f.args.len()) {
-                        return Err(format!(
-                            "function '{n}' expects {}..{} arguments, got {}",
-                            f.required,
-                            f.args.len(),
-                            args.len()
-                        ));
-                    }
-                    for (a, t) in args.iter().zip(&f.args) {
-                        let got = self.expr_as(a, t)?;
-                        if &got != t {
-                            return Err(format!("argument to '{n}' expects {t:?}, got {got:?}"));
-                        }
-                    }
-                    return Ok(f.ret.clone());
+                    return self.check_signature_call(n, f, args);
                 }
                 if stdlib::BASE_FUNCTIONS.contains(&n.as_str()) {
                     if !self.imports.contains("base") {
@@ -988,6 +1569,7 @@ impl Checker {
                             required: signature.required,
                             ret: signature.ret.clone(),
                             varargs: signature.varargs,
+                            generic: Vec::new(),
                         };
                         return self.check_signature_call(n, &signature, args);
                     }
@@ -1070,6 +1652,7 @@ impl Checker {
                 if n == "this" || n == "self" {
                     return Err(format!("cannot assign to '{n}'"));
                 }
+                self.check_implicit_private_access(n)?;
                 if let Some(field_ty) = self.implicit_field(n) {
                     if op != "=" && !matches!(field_ty, Ty::Int | Ty::Float | Ty::Any) {
                         return Err(format!("compound assignment {op} requires a numeric field"));
@@ -1364,15 +1947,13 @@ fn check_callable(
     c.position = Some((function.line, function.column));
     let previous_class = c.current_class.clone();
     let previous_constructor = c.current_constructor;
+    let previous_static = c.current_static;
     let previous_super_call = c.allow_super_call;
     c.current_class = class.map(str::to_string);
     c.current_constructor = constructor;
-    let derived_constructor = constructor
-        && class.is_some_and(|name| {
-            c.classes
-                .get(name)
-                .is_some_and(|info| info.parent.is_some())
-        });
+    c.current_static = function.is_static;
+    let derived_constructor =
+        constructor && class.is_some_and(|name| c.first_class_parent(name).is_some());
     c.allow_super_call = derived_constructor;
     if derived_constructor
         && !matches!(
@@ -1394,8 +1975,8 @@ fn check_callable(
     }
     c.function_depth += 1;
     c.push();
-    if let Some(class_name) = class {
-        c.declare("self", Ty::Struct(class_name.to_string()), false)?;
+    if let Some(class_name) = class.filter(|_| !function.is_static) {
+        c.declare("self", c.generic_instance_type(class_name), false)?;
     }
     c.allow_super_call = false;
     for p in &function.params {
@@ -1425,6 +2006,7 @@ fn check_callable(
     c.restore_types(&outer_types);
     c.current_class = previous_class;
     c.current_constructor = previous_constructor;
+    c.current_static = previous_static;
     c.allow_super_call = previous_super_call;
     Ok(())
 }
@@ -1464,6 +2046,10 @@ fn collect_structs(program: &[Top]) -> Result<Structs, String> {
 }
 
 fn signature(params: &[Param], ret: Ty) -> FnSig {
+    signature_generic(params, ret, Vec::new())
+}
+
+fn signature_generic(params: &[Param], ret: Ty, generic: Vec<String>) -> FnSig {
     FnSig {
         args: params.iter().map(|param| param.ty.clone()).collect(),
         required: params
@@ -1472,6 +2058,7 @@ fn signature(params: &[Param], ret: Ty) -> FnSig {
             .count(),
         ret,
         varargs: false,
+        generic,
     }
 }
 
@@ -1481,6 +2068,7 @@ fn empty_signature() -> FnSig {
         required: 0,
         ret: Ty::Void,
         varargs: false,
+        generic: Vec::new(),
     }
 }
 
@@ -1492,29 +2080,43 @@ fn signatures_match(left: &FnSig, right: &FnSig) -> bool {
 }
 
 fn effective_constructor(classes: &Classes, class_name: &str) -> FnSig {
-    let mut current = Some(class_name);
-    while let Some(name) = current {
-        let Some(class) = classes.get(name) else {
-            break;
-        };
-        if let Some(constructor) = &class.constructor {
-            return constructor.clone();
+    fn find(classes: &Classes, class_name: &str, visited: &mut HashSet<String>) -> Option<FnSig> {
+        if !visited.insert(class_name.to_owned()) {
+            return None;
         }
-        current = class.parent.as_deref();
+        let class = classes.get(class_name)?;
+        class.constructor.clone().or_else(|| {
+            class
+                .parents
+                .iter()
+                .find(|parent| classes.contains_key(*parent))
+                .and_then(|parent| find(classes, parent, visited))
+        })
     }
-    empty_signature()
+    find(classes, class_name, &mut HashSet::new()).unwrap_or_else(empty_signature)
 }
 
 fn class_method<'a>(classes: &'a Classes, class_name: &str, method: &str) -> Option<&'a FnSig> {
-    let mut current = Some(class_name);
-    while let Some(name) = current {
-        let class = classes.get(name)?;
-        if let Some(signature) = class.methods.get(method) {
-            return Some(signature);
+    fn find<'a>(
+        classes: &'a Classes,
+        class_name: &str,
+        method: &str,
+        visited: &mut HashSet<String>,
+    ) -> Option<&'a FnSig> {
+        if !visited.insert(class_name.to_owned()) {
+            return None;
         }
-        current = class.parent.as_deref();
+        let class = classes.get(class_name)?;
+        class.methods.get(method).or_else(|| {
+            class.parents.iter().find_map(|parent| {
+                classes
+                    .contains_key(parent)
+                    .then(|| find(classes, parent, method, visited))
+                    .flatten()
+            })
+        })
     }
-    None
+    find(classes, class_name, method, &mut HashSet::new())
 }
 
 fn class_field(classes: &Classes, class_name: &str, field: &str) -> Option<Ty> {
@@ -1525,62 +2127,93 @@ fn class_field(classes: &Classes, class_name: &str, field: &str) -> Option<Ty> {
 fn collect_classes(program: &[Top]) -> Result<Classes, String> {
     let mut classes = HashMap::new();
     for top in program {
-        let Top::Class(definition) = top else {
-            continue;
-        };
-        let mut fields = HashMap::new();
-        let mut members = HashSet::new();
-        for field in &definition.fields {
-            if field.ty == Ty::Void {
-                return Err(format!(
-                    "field '{}.{}' cannot have type 'void' at line {}, column {}",
-                    definition.name, field.name, field.line, field.column
-                ));
+        match top {
+            Top::Class(definition) => {
+                let mut fields = HashMap::new();
+                let mut static_fields = HashMap::new();
+                let mut static_methods = HashMap::new();
+                let mut private_fields = HashSet::new();
+                let mut private_methods = HashSet::new();
+                let mut members = HashSet::new();
+
+                for field in &definition.fields {
+                    if field.ty == Ty::Void {
+                        return Err(format!(
+                            "field '{}.{}' cannot have type 'void' at line {}, column {}",
+                            definition.name, field.name, field.line, field.column
+                        ));
+                    }
+                    if !members.insert(field.name.clone()) {
+                        return Err(format!(
+                            "duplicate member '{}.{}' at line {}, column {}",
+                            definition.name, field.name, field.line, field.column
+                        ));
+                    }
+                    if field.is_private {
+                        private_fields.insert(field.name.clone());
+                    }
+                    if field.is_static {
+                        static_fields.insert(field.name.clone(), field.ty.clone());
+                    } else {
+                        fields.insert(field.name.clone(), field.ty.clone());
+                    }
+                }
+
+                let mut methods = HashMap::new();
+                for method in &definition.methods {
+                    if !members.insert(method.name.clone()) {
+                        return Err(format!(
+                            "duplicate member '{}.{}' at line {}, column {}",
+                            definition.name, method.name, method.line, method.column
+                        ));
+                    }
+                    let method_signature = signature_generic(
+                        &method.params,
+                        method.ret.clone(),
+                        method.generic.clone(),
+                    );
+                    if method.is_private {
+                        private_methods.insert(method.name.clone());
+                    }
+                    if method.is_static {
+                        static_methods.insert(method.name.clone(), method_signature);
+                    } else {
+                        methods.insert(method.name.clone(), method_signature);
+                    }
+                }
+
+                let constructor = definition.constructor.as_ref().map(|constructor| {
+                    signature_generic(&constructor.params, Ty::Void, definition.generic.clone())
+                });
+
+                if classes
+                    .insert(
+                        definition.name.clone(),
+                        ClassInfo {
+                            parents: definition.parents.clone(),
+                            interfaces: definition.interfaces.clone(),
+                            generic: definition.generic.clone(),
+                            own_fields: fields.clone(),
+                            fields,
+                            methods,
+                            constructor,
+                            static_fields,
+                            static_methods,
+                            private_fields,
+                            private_methods,
+                            line: definition.line,
+                            column: definition.column,
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(format!(
+                        "duplicate class '{}' at line {}, column {}",
+                        definition.name, definition.line, definition.column
+                    ));
+                }
             }
-            if !members.insert(field.name.clone()) {
-                return Err(format!(
-                    "duplicate member '{}.{}' at line {}, column {}",
-                    definition.name, field.name, field.line, field.column
-                ));
-            }
-            fields.insert(field.name.clone(), field.ty.clone());
-        }
-        let mut methods = HashMap::new();
-        for method in &definition.methods {
-            if !members.insert(method.name.clone()) {
-                return Err(format!(
-                    "duplicate member '{}.{}' at line {}, column {}",
-                    definition.name, method.name, method.line, method.column
-                ));
-            }
-            methods.insert(
-                method.name.clone(),
-                signature(&method.params, method.ret.clone()),
-            );
-        }
-        let constructor = definition
-            .constructor
-            .as_ref()
-            .map(|constructor| signature(&constructor.params, Ty::Void));
-        if classes
-            .insert(
-                definition.name.clone(),
-                ClassInfo {
-                    parent: definition.parent.clone(),
-                    own_fields: fields.clone(),
-                    fields,
-                    methods,
-                    constructor,
-                    line: definition.line,
-                    column: definition.column,
-                },
-            )
-            .is_some()
-        {
-            return Err(format!(
-                "duplicate class '{}' at line {}, column {}",
-                definition.name, definition.line, definition.column
-            ));
+            _ => continue,
         }
     }
     Ok(classes)
@@ -1589,6 +2222,7 @@ fn collect_classes(program: &[Top]) -> Result<Classes, String> {
 fn resolve_class_fields(
     name: &str,
     classes: &Classes,
+    interfaces: &HashMap<String, InterfaceDef>,
     visiting: &mut HashSet<String>,
     resolved: &mut HashMap<String, HashMap<String, Ty>>,
 ) -> Result<HashMap<String, Ty>, String> {
@@ -1606,18 +2240,43 @@ fn resolve_class_fields(
     }
     let line = class.line;
     let column = class.column;
-    let parent = class.parent.clone();
     let own_fields = class.own_fields.clone();
-    let mut fields = if let Some(parent) = &parent {
-        if !classes.contains_key(parent) {
+    let mut fields = HashMap::new();
+    for parent_name in &class.parents {
+        if !classes.contains_key(parent_name) && !interfaces.contains_key(parent_name) {
             return Err(format!(
-                "class '{name}' extends unknown class '{parent}' at line {line}, column {column}"
+                "class '{name}' extends unknown class '{parent_name}' at line {line}, column {column}"
             ));
         }
-        resolve_class_fields(parent, classes, visiting, resolved)?
-    } else {
-        HashMap::new()
-    };
+        if classes.contains_key(parent_name) {
+            let parent_class = &classes[parent_name];
+            if parent_class.generic.len() != class.generic.len() {
+                return Err(format!(
+                    "class '{name}' must declare {} type parameters to extend generic class '{parent_name}' at line {line}, column {column}",
+                    parent_class.generic.len()
+                ));
+            }
+            let bindings = parent_class
+                .generic
+                .iter()
+                .zip(&class.generic)
+                .map(|(parent, child)| (parent.clone(), Ty::Generic(child.clone())))
+                .collect::<HashMap<_, _>>();
+            let parent_fields =
+                resolve_class_fields(parent_name, classes, interfaces, visiting, resolved)?;
+            for (field_name, field_ty) in parent_fields {
+                let field_ty = substitute_type(&field_ty, &bindings);
+                if let Some(inherited) = fields.get(&field_name) {
+                    if inherited != &field_ty {
+                        return Err(format!(
+                            "class '{name}' redefines inherited field '{field_name}' as {field_ty:?} at line {line}, column {column}; inherited type is {inherited:?}"
+                        ));
+                    }
+                }
+                fields.insert(field_name, field_ty);
+            }
+        }
+    }
     for (field_name, field_ty) in own_fields {
         if let Some(inherited) = fields.get(&field_name) {
             if inherited != &field_ty {
@@ -1633,12 +2292,21 @@ fn resolve_class_fields(
     Ok(fields)
 }
 
-fn resolve_classes(classes: &mut Classes) -> Result<(), String> {
+fn resolve_classes(
+    classes: &mut Classes,
+    interfaces: &HashMap<String, InterfaceDef>,
+) -> Result<(), String> {
     let mut resolved = HashMap::new();
     let mut names = classes.keys().cloned().collect::<Vec<_>>();
     names.sort();
     for name in &names {
-        let fields = resolve_class_fields(name, classes, &mut HashSet::new(), &mut resolved)?;
+        let fields = resolve_class_fields(
+            name,
+            classes,
+            interfaces,
+            &mut HashSet::new(),
+            &mut resolved,
+        )?;
         if let Some(class) = classes.get_mut(name) {
             class.fields = fields;
         }
@@ -1649,30 +2317,41 @@ fn resolve_classes(classes: &mut Classes) -> Result<(), String> {
         };
         let line = class.line;
         let column = class.column;
-        let parent = class.parent.clone();
-        let own_fields = class.own_fields.clone();
-        let methods = class.methods.clone();
-        let Some(parent_name) = parent else {
-            continue;
-        };
-        for field_name in own_fields.keys() {
-            if class_method(classes, &parent_name, field_name).is_some() {
+        let class_parents = class
+            .parents
+            .iter()
+            .filter(|parent| classes.contains_key(*parent))
+            .collect::<Vec<_>>();
+        for parent in class_parents.iter().skip(1) {
+            let constructor = effective_constructor(classes, parent);
+            if constructor.required > 0 {
                 return Err(format!(
-                    "field '{name}.{field_name}' conflicts with a method of the same name at line {line}, column {column}"
+                    "secondary base class '{parent}' of '{name}' must have a constructor with no required arguments at line {line}, column {column}"
                 ));
             }
         }
-        for (method_name, method_signature) in &methods {
-            if class_field(classes, &parent_name, method_name).is_some() {
-                return Err(format!(
-                    "method '{name}.{method_name}' conflicts with an inherited field of the same name at line {line}, column {column}"
-                ));
-            }
-            if let Some(inherited) = class_method(classes, &parent_name, method_name) {
-                if !signatures_match(inherited, method_signature) {
+        let own_fields = class.own_fields.clone();
+        let methods = class.methods.clone();
+        for parent_name in &class.parents {
+            for field_name in own_fields.keys() {
+                if class_method(classes, parent_name, field_name).is_some() {
                     return Err(format!(
-                        "method '{name}.{method_name}' overrides an inherited method with a different signature at line {line}, column {column}"
+                        "field '{name}.{field_name}' conflicts with a method of the same name at line {line}, column {column}"
                     ));
+                }
+            }
+            for (method_name, method_signature) in &methods {
+                if class_field(classes, parent_name, method_name).is_some() {
+                    return Err(format!(
+                        "method '{name}.{method_name}' conflicts with an inherited field of the same name at line {line}, column {column}"
+                    ));
+                }
+                if let Some(inherited) = class_method(classes, parent_name, method_name) {
+                    if !signatures_match(inherited, method_signature) {
+                        return Err(format!(
+                            "method '{name}.{method_name}' overrides an inherited method with a different signature at line {line}, column {column}"
+                        ));
+                    }
                 }
             }
         }
@@ -1680,10 +2359,96 @@ fn resolve_classes(classes: &mut Classes) -> Result<(), String> {
     Ok(())
 }
 
-fn collect_types(program: &[Top]) -> Result<(Structs, Classes), String> {
+fn collect_interfaces(program: &[Top]) -> Result<HashMap<String, InterfaceDef>, String> {
+    let mut interfaces = HashMap::new();
+    for top in program {
+        if let Top::Interface(definition) = top {
+            if interfaces
+                .insert(definition.name.clone(), definition.clone())
+                .is_some()
+            {
+                return Err(format!(
+                    "duplicate interface '{}' at line {}, column {}",
+                    definition.name, definition.line, definition.column
+                ));
+            }
+        }
+    }
+    Ok(interfaces)
+}
+
+fn validate_interfaces(interfaces: &HashMap<String, InterfaceDef>) -> Result<(), String> {
+    fn visit(
+        name: &str,
+        interfaces: &HashMap<String, InterfaceDef>,
+        visiting: &mut HashSet<String>,
+        resolved: &mut HashSet<String>,
+    ) -> Result<(), String> {
+        if resolved.contains(name) {
+            return Ok(());
+        }
+        let Some(interface) = interfaces.get(name) else {
+            return Err(format!("unknown interface '{name}'"));
+        };
+        if !visiting.insert(name.to_owned()) {
+            return Err(format!(
+                "interface inheritance cycle involving '{name}' at line {}, column {}",
+                interface.line, interface.column
+            ));
+        }
+        let mut members = HashSet::new();
+        for method in &interface.methods {
+            if !members.insert(method.name.as_str()) {
+                return Err(format!(
+                    "interface '{}' declares method '{}' more than once at line {}, column {}",
+                    interface.name, method.name, method.line, method.column
+                ));
+            }
+        }
+        for parent in &interface.parents {
+            visit(parent, interfaces, visiting, resolved)?;
+        }
+        visiting.remove(name);
+        resolved.insert(name.to_owned());
+        Ok(())
+    }
+    let mut resolved = HashSet::new();
+    let mut names = interfaces.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        visit(&name, interfaces, &mut HashSet::new(), &mut resolved)?;
+    }
+    Ok(())
+}
+
+fn collect_types(
+    program: &[Top],
+) -> Result<(Structs, Classes, HashMap<String, InterfaceDef>), String> {
     let mut structs = collect_structs(program)?;
     let mut classes = collect_classes(program)?;
-    resolve_classes(&mut classes)?;
+    let interfaces = collect_interfaces(program)?;
+    validate_interfaces(&interfaces)?;
+
+    for name in interfaces.keys() {
+        if classes.contains_key(name) || structs.contains_key(name) {
+            return Err(format!(
+                "interface '{name}' conflicts with another type of the same name"
+            ));
+        }
+    }
+
+    for (name, class) in &classes {
+        for interface in &class.interfaces {
+            if !interfaces.contains_key(interface) {
+                return Err(format!(
+                    "class '{name}' implements unknown interface '{interface}'"
+                ));
+            }
+        }
+    }
+
+    resolve_classes(&mut classes, &interfaces)?;
+
     for (name, class) in &classes {
         if structs.insert(name.clone(), class.fields.clone()).is_some() {
             return Err(format!(
@@ -1691,18 +2456,37 @@ fn collect_types(program: &[Top]) -> Result<(Structs, Classes), String> {
             ));
         }
     }
-    for fields in structs.values() {
-        for ty in fields.values() {
-            validate_type(ty, &structs)?;
-        }
-    }
-    Ok((structs, classes))
+
+    Ok((structs, classes, interfaces))
 }
 
-fn validate_type(ty: &Ty, structs: &Structs) -> Result<(), String> {
+fn validate_type(ty: &Ty, structs: &Structs, classes: &Classes, interfaces: &HashMap<String, InterfaceDef>) -> Result<(), String> {
     match ty {
-        Ty::Struct(name) if !structs.contains_key(name) => {
+        Ty::Struct(name) if !structs.contains_key(name) && !interfaces.contains_key(name) => {
             Err(format!("unknown struct type '{name}'"))
+        }
+        Ty::Struct(name)
+            if classes
+                .get(name)
+                .is_some_and(|class| !class.generic.is_empty()) =>
+        {
+            Err(format!("generic class '{name}' requires type arguments"))
+        }
+        Ty::Applied(name, arguments) => {
+            let Some(class) = classes.get(name) else {
+                return Err(format!("unknown generic class type '{name}'"));
+            };
+            if class.generic.len() != arguments.len() {
+                return Err(format!(
+                    "class '{name}' expects {} type arguments, got {}",
+                    class.generic.len(),
+                    arguments.len()
+                ));
+            }
+            for argument in arguments {
+                validate_type(argument, structs, classes, interfaces)?;
+            }
+            Ok(())
         }
         Ty::Module(path) if path.is_empty() => {
             Err("'module' is only valid in a declaration initialized from require(\"path\")".into())
@@ -1717,12 +2501,12 @@ fn validate_type(ty: &Ty, structs: &Structs) -> Result<(), String> {
             if value.as_ref() == &Ty::Void {
                 return Err("table values cannot have type 'void'".into());
             }
-            validate_type(value, structs)
+            validate_type(value, structs, classes, interfaces)
         }
-        Ty::List(element) => validate_type(element, structs),
+        Ty::List(element) => validate_type(element, structs, classes, interfaces),
         Ty::Tuple(Some(elements)) => {
             for element in elements {
-                validate_type(element, structs)?;
+                validate_type(element, structs, classes, interfaces)?;
             }
             Ok(())
         }
@@ -1730,10 +2514,17 @@ fn validate_type(ty: &Ty, structs: &Structs) -> Result<(), String> {
     }
 }
 
-fn validate_program_types(program: &[Top], structs: &Structs) -> Result<(), String> {
+fn validate_program_types(
+    program: &[Top],
+    structs: &Structs,
+    classes: &Classes,
+    interfaces: &HashMap<String, InterfaceDef>,
+) -> Result<(), String> {
     fn validate_stmts(
         statements: &[Stmt],
         structs: &HashMap<String, HashMap<String, Ty>>,
+        classes: &Classes,
+        interfaces: &HashMap<String, InterfaceDef>,
     ) -> Result<(), String> {
         for statement in statements {
             let result = match &statement.kind {
@@ -1741,15 +2532,17 @@ fn validate_program_types(program: &[Top], structs: &Structs) -> Result<(), Stri
                     if decl.ty == Ty::Auto {
                         Ok(())
                     } else {
-                        validate_type(&decl.ty, structs)
+                        validate_type(&decl.ty, structs, classes, interfaces)
                     }
                 }
-                StmtKind::Block(body) | StmtKind::While(_, body) => validate_stmts(body, structs),
-                StmtKind::If(_, yes, no) => {
-                    validate_stmts(yes, structs)?;
-                    validate_stmts(no, structs)
+                StmtKind::Block(body) | StmtKind::While(_, body) => {
+                    validate_stmts(body, structs, classes, interfaces)
                 }
-                StmtKind::For { body, .. } => validate_stmts(body, structs),
+                StmtKind::If(_, yes, no) => {
+                    validate_stmts(yes, structs, classes, interfaces)?;
+                    validate_stmts(no, structs, classes, interfaces)
+                }
+                StmtKind::For { body, .. } => validate_stmts(body, structs, classes, interfaces),
                 _ => Ok(()),
             };
             result.map_err(|message| {
@@ -1766,11 +2559,11 @@ fn validate_program_types(program: &[Top], structs: &Structs) -> Result<(), Stri
         match top {
             Top::Fun(function) => {
                 let result = (|| {
-                    validate_type(&function.ret, structs)?;
+                    validate_type(&function.ret, structs, classes, interfaces)?;
                     for param in &function.params {
-                        validate_type(&param.ty, structs)?;
+                        validate_type(&param.ty, structs, classes, interfaces)?;
                     }
-                    validate_stmts(&function.body, structs)
+                    validate_stmts(&function.body, structs, classes, interfaces)
                 })();
                 result.map_err(|message| {
                     format!(
@@ -1779,17 +2572,36 @@ fn validate_program_types(program: &[Top], structs: &Structs) -> Result<(), Stri
                     )
                 })?;
             }
-            Top::Stmt(statement) => validate_stmts(std::slice::from_ref(statement), structs)?,
+            Top::Stmt(statement) => {
+                validate_stmts(std::slice::from_ref(statement), structs, classes, interfaces)?
+            }
             Top::Struct(StructDef { .. }) => {}
+            Top::Interface(interface) => {
+                let result = (|| {
+                    for method in &interface.methods {
+                        validate_type(&method.ret, structs, classes, interfaces)?;
+                        for param in &method.params {
+                            validate_type(&param.ty, structs, classes, interfaces)?;
+                        }
+                    }
+                    Ok(())
+                })();
+                result.map_err(|message: String| {
+                    format!(
+                        "{message} at line {}, column {}",
+                        interface.line, interface.column
+                    )
+                })?;
+            }
             Top::Class(class) => {
                 let result = (|| {
                     for field in &class.fields {
-                        validate_type(&field.ty, structs)?;
+                        validate_type(&field.ty, structs, classes, interfaces)?;
                     }
                     for callable in class.methods.iter().chain(class.constructor.iter()) {
-                        validate_type(&callable.ret, structs)?;
+                        validate_type(&callable.ret, structs, classes, interfaces)?;
                         for param in &callable.params {
-                            validate_type(&param.ty, structs)?;
+                            validate_type(&param.ty, structs, classes, interfaces)?;
                         }
                     }
                     Ok(())
@@ -1845,14 +2657,15 @@ pub(crate) fn check(
     program: &[Top],
     modules: &HashMap<String, ModuleExports>,
 ) -> Result<(), String> {
-    let (structs, classes) = collect_types(program)?;
-    validate_program_types(program, &structs)?;
+    let (structs, classes, interfaces) = collect_types(program).map_err(|e| e)?;
+    validate_program_types(program, &structs, &classes, &interfaces)?;
     let unstable_globals = retyped_global_names(program);
     let imports = collect_imports(program)?;
     let mut c = Checker::new(
         modules.clone(),
         structs,
         classes,
+        interfaces,
         unstable_globals,
         imports.clone(),
     );
@@ -1863,6 +2676,7 @@ pub(crate) fn check(
             required: 0,
             ret: Ty::Void,
             varargs: true,
+            generic: Vec::new(),
         },
     );
     c.funcs.insert(
@@ -1872,6 +2686,7 @@ pub(crate) fn check(
             required: 1,
             ret: Ty::Void,
             varargs: false,
+            generic: Vec::new(),
         },
     );
     for package in &imports {
@@ -1889,6 +2704,7 @@ pub(crate) fn check(
                     required: signature.required,
                     ret: signature.ret.clone(),
                     varargs: signature.varargs,
+                    generic: Vec::new(),
                 }),
             );
         }
@@ -1970,6 +2786,7 @@ pub(crate) fn check(
                         required,
                         ret: f.ret.clone(),
                         varargs: false,
+                        generic: f.generic.clone(),
                     },
                 );
             }
@@ -2040,7 +2857,7 @@ pub(crate) fn check(
                     }
                 }
                 Top::Stmt(s) => c.stmt(s, &Ty::Void)?,
-                Top::Fun(_) | Top::Struct(_) | Top::Class(_) => {}
+                Top::Fun(_) | Top::Struct(_) | Top::Class(_) | Top::Interface(_) => {}
                 Top::Import { .. } => {}
             }
         }
@@ -2055,13 +2872,15 @@ pub(crate) fn check(
                 continue;
             };
             for field in &class.fields {
-                c.position = Some((field.line, field.column));
-                let got = c.expr_as(&field.default, &field.ty)?;
-                if got != field.ty {
-                    return Err(format!(
-                        "field '{}.{}' expects {:?}, got {:?}",
-                        class.name, field.name, field.ty, got
-                    ));
+                if let Some(default) = &field.default {
+                    c.position = Some((field.line, field.column));
+                    let got = c.expr_as(default, &field.ty)?;
+                    if got != field.ty {
+                        return Err(format!(
+                            "field '{}.{}' expects {:?}, got {:?}",
+                            class.name, field.name, field.ty, got
+                        ));
+                    }
                 }
             }
             if let Some(constructor) = &class.constructor {
@@ -2081,6 +2900,57 @@ pub(crate) fn check(
                     Some(&class.name),
                     false,
                 )?;
+            }
+        }
+        for (name, class) in &c.classes {
+            let interface_names = class
+                .interfaces
+                .iter()
+                .chain(
+                    class
+                        .parents
+                        .iter()
+                        .filter(|parent| c.interfaces.contains_key(*parent)),
+                )
+                .cloned()
+                .collect::<HashSet<_>>();
+            for interface_name in interface_names {
+                let Some(interface) = c.interfaces.get(&interface_name) else {
+                    continue;
+                };
+                let mut required = HashMap::new();
+                fn collect(
+                    name: &str,
+                    interfaces: &HashMap<String, InterfaceDef>,
+                    required: &mut HashMap<String, FnSig>,
+                ) {
+                    if let Some(interface) = interfaces.get(name) {
+                        for parent in &interface.parents {
+                            collect(parent, interfaces, required);
+                        }
+                        for method in &interface.methods {
+                            required.insert(
+                                method.name.clone(),
+                                signature(&method.params, method.ret.clone()),
+                            );
+                        }
+                    }
+                }
+                collect(&interface_name, &c.interfaces, &mut required);
+                for (method_name, method_signature) in required {
+                    let Some(implemented) = class_method(&c.classes, name, &method_name) else {
+                        return Err(format!(
+                            "class '{name}' does not implement interface method '{}.{method_name}'",
+                            interface.name
+                        ));
+                    };
+                    if !signatures_match(implemented, &method_signature) {
+                        return Err(format!(
+                            "class '{name}' implements interface method '{}.{method_name}' with an incompatible signature",
+                            interface.name
+                        ));
+                    }
+                }
             }
         }
         Ok(())

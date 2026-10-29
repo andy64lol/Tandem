@@ -899,6 +899,142 @@ mod tests {
     }
 
     #[test]
+    fn compiles_multiple_inheritance_and_interfaces() {
+        let lua = compile(
+            r#"
+            import base;
+            interface Named { fn name() -> str; }
+            interface Renderable extends Named { fn render() -> str; }
+            class Naming { fn name() -> str { return "object"; } }
+            class Drawing { fn render() -> str { return "shape"; } }
+            class Shape extends Naming, Drawing implements Renderable {}
+            Renderable item = new Shape;
+            assert(item.name() == "object");
+            assert(item.render() == "shape");
+            "#,
+        )
+        .unwrap();
+        assert!(lua.contains("Shape = setmetatable({}, { __index = function(t, k)"));
+        assert!(lua.contains("value = Naming[k]"));
+        assert!(lua.contains("value = Drawing[k]"));
+        assert!(lua.contains("item:name()"));
+        assert!(lua.contains("item:render()"));
+        crate::runtime::run_source(&lua, "interfaces.tlua").unwrap();
+
+        assert!(error_message(
+            "interface Drawable { fn draw() -> void; }\nclass Sprite implements Drawable {}"
+        )
+        .contains("does not implement interface method 'Drawable.draw'"));
+    }
+
+    #[test]
+    fn executes_each_concrete_base_initializer_once() {
+        let lua = compile(
+            r#"
+            import base;
+            class Root {
+                static int constructions = 0;
+                int rootValue = 0;
+                constructor() {
+                    Root.constructions += 1;
+                    self.rootValue = 3;
+                }
+            }
+            class Left extends Root {
+                int leftValue = 1;
+                constructor() { super(); }
+            }
+            class Right extends Root {
+                int rightValue = 2;
+                constructor() { super(); }
+            }
+            class Diamond extends Left, Right {
+                constructor() { super(); }
+            }
+            local class item = new Diamond;
+            assert(Root.constructions == 1);
+            assert(item.rootValue == 3);
+            assert(item.leftValue == 1);
+            assert(item.rightValue == 2);
+            "#,
+        )
+        .unwrap();
+        crate::runtime::run_source(&lua, "multiple-inheritance.tlua").unwrap();
+    }
+
+    #[test]
+    fn compiles_static_and_private_class_members() {
+        let lua = compile(
+            r#"
+            class Counter {
+                static int value = 0;
+                private int secret = 7;
+                static fn bump() -> int {
+                    Counter.value += 1;
+                    return Counter.value;
+                }
+                private fn revealSecret() -> int { return secret; }
+                fn reveal() -> int { return self.revealSecret(); }
+            }
+            int count = Counter.bump();
+            local class counter = new Counter;
+            int hidden = counter.reveal();
+            "#,
+        )
+        .unwrap();
+        assert!(lua.contains("Counter.value = 0"));
+        assert!(lua.contains("Counter.bump()"));
+        assert!(lua.contains("Counter.value = Counter.value + 1"));
+        assert!(lua.contains("function Counter:revealSecret()"));
+        crate::runtime::run_source(&lua, "static-private.tlua").unwrap();
+        assert!(error_message(
+            "class Counter { private int secret = 1; }\nlocal class c = new Counter;\nint x = c.secret;"
+        )
+        .contains("is private"));
+        assert!(error_message(
+            "class Counter { private fn hidden() {} }\nlocal class c = new Counter;\nc.hidden();"
+        )
+        .contains("is private"));
+    }
+
+    #[test]
+    fn compiles_generic_functions_and_classes() {
+        let lua = compile(
+            r#"
+            fn identity<T>(T value) -> T { return value; }
+            fn head<T>(list T values) -> T { return values[1]; }
+            class Box<T> {
+                T value;
+                constructor(T value) { self.value = value; }
+                fn get() -> T { return value; }
+                fn echo<U>(U other) -> U { return other; }
+            }
+            fn wrap<T>(T value) -> Box<T> { return new Box<T>(value); }
+            int copied = identity(12);
+            int first = head([copied, 13]);
+            Box<int> box = wrap(copied);
+            int result = box.get();
+            int echoed = box.echo(14);
+            "#,
+        )
+        .unwrap();
+        assert!(lua.contains("function identity(value)"));
+        assert!(lua.contains("function Box.new(value)"));
+        assert!(lua.contains("function Box:get()"));
+        assert!(lua.contains("function Box:echo(other)"));
+        assert!(lua.contains("box = wrap(copied)"));
+        crate::runtime::run_source(&lua, "generic-classes.tlua").unwrap();
+        assert!(error_message(
+            "class Box<T> { T value; constructor(T value) { self.value = value; } }\nlocal class b = new Box(1);"
+        )
+        .contains("requires type arguments"));
+        assert!(error_message(
+            "fn same<T>(T left, T right) -> T { return left; }\nint value = same(1, \"x\");"
+        )
+        .contains("incompatible types"));
+    }
+
+    #[test]
     fn lua_modules_are_imported_dynamically() {
         let lua = with_modules(
             &[(

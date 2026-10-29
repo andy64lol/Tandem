@@ -1,19 +1,37 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::compiler::ast::{
-    parse_printf_format, retyped_global_names, ClassDef, Expr, FormatPart, Fun, ListElement, Stmt,
-    StmtKind, TableShape, Top, Ty, VarDecl,
+    parse_printf_format, retyped_global_names, substitute_type, ClassDef, Expr, FnSig, FormatPart,
+    Fun, ListElement, Stmt, StmtKind, TableShape, Top, Ty, VarDecl,
 };
 use crate::compiler::stdlib;
 
 #[derive(Clone, Default)]
 struct ClassInfo {
-    parent: Option<String>,
+    is_interface: bool,
+    parents: Vec<String>,
+    generic: Vec<String>,
     fields: HashMap<String, Ty>,
-    methods: HashMap<String, Ty>,
+    methods: HashMap<String, FnSig>,
+    static_fields: HashMap<String, Ty>,
+    static_methods: HashMap<String, FnSig>,
 }
 
 type Classes = HashMap<String, ClassInfo>;
+
+fn method_signature(method: &Fun) -> FnSig {
+    FnSig {
+        args: method.params.iter().map(|param| param.ty.clone()).collect(),
+        required: method
+            .params
+            .iter()
+            .take_while(|param| param.default.is_none())
+            .count(),
+        ret: method.ret.clone(),
+        varargs: false,
+        generic: method.generic.clone(),
+    }
+}
 
 fn collect_classes(program: &[Top]) -> Classes {
     let mut classes = Classes::new();
@@ -24,17 +42,51 @@ fn collect_classes(program: &[Top]) -> Classes {
         classes.insert(
             definition.name.clone(),
             ClassInfo {
-                parent: definition.parent.clone(),
+                is_interface: false,
+                parents: definition.parents.clone(),
+                generic: definition.generic.clone(),
                 fields: definition
                     .fields
                     .iter()
+                    .filter(|field| !field.is_static)
                     .map(|field| (field.name.clone(), field.ty.clone()))
                     .collect(),
                 methods: definition
                     .methods
                     .iter()
-                    .map(|method| (method.name.clone(), method.ret.clone()))
+                    .filter(|method| !method.is_static)
+                    .map(|method| (method.name.clone(), method_signature(method)))
                     .collect(),
+                static_fields: definition
+                    .fields
+                    .iter()
+                    .filter(|field| field.is_static)
+                    .map(|field| (field.name.clone(), field.ty.clone()))
+                    .collect(),
+                static_methods: definition
+                    .methods
+                    .iter()
+                    .filter(|method| method.is_static)
+                    .map(|method| (method.name.clone(), method_signature(method)))
+                    .collect(),
+            },
+        );
+    }
+    for top in program {
+        let Top::Interface(definition) = top else {
+            continue;
+        };
+        classes.insert(
+            definition.name.clone(),
+            ClassInfo {
+                is_interface: true,
+                parents: definition.parents.clone(),
+                methods: definition
+                    .methods
+                    .iter()
+                    .map(|method| (method.name.clone(), method_signature(method)))
+                    .collect(),
+                ..ClassInfo::default()
             },
         );
     }
@@ -42,27 +94,94 @@ fn collect_classes(program: &[Top]) -> Classes {
 }
 
 fn class_field(classes: &Classes, class_name: &str, field: &str) -> Option<Ty> {
-    let mut current = Some(class_name);
-    while let Some(name) = current {
-        let class = classes.get(name)?;
-        if let Some(ty) = class.fields.get(field) {
-            return Some(ty.clone());
+    fn find(
+        classes: &Classes,
+        class_name: &str,
+        field: &str,
+        visited: &mut HashSet<String>,
+    ) -> Option<Ty> {
+        if !visited.insert(class_name.to_owned()) {
+            return None;
         }
-        current = class.parent.as_deref();
+        let class = classes.get(class_name)?;
+        class.fields.get(field).cloned().or_else(|| {
+            class.parents.iter().find_map(|parent| {
+                classes
+                    .contains_key(parent)
+                    .then(|| find(classes, parent, field, visited))
+                    .flatten()
+            })
+        })
     }
-    None
+    find(classes, class_name, field, &mut HashSet::new())
 }
 
-fn class_method(classes: &Classes, class_name: &str, method: &str) -> Option<Ty> {
-    let mut current = Some(class_name);
-    while let Some(name) = current {
-        let class = classes.get(name)?;
-        if let Some(ty) = class.methods.get(method) {
-            return Some(ty.clone());
+fn class_static_method(classes: &Classes, class_name: &str, method: &str) -> Option<FnSig> {
+    fn find(
+        classes: &Classes,
+        class_name: &str,
+        method: &str,
+        visited: &mut HashSet<String>,
+    ) -> Option<FnSig> {
+        if !visited.insert(class_name.to_owned()) {
+            return None;
         }
-        current = class.parent.as_deref();
+        let class = classes.get(class_name)?;
+        class.static_methods.get(method).cloned().or_else(|| {
+            class.parents.iter().find_map(|parent| {
+                classes
+                    .contains_key(parent)
+                    .then(|| find(classes, parent, method, visited))
+                    .flatten()
+            })
+        })
     }
-    None
+    find(classes, class_name, method, &mut HashSet::new())
+}
+
+fn class_static_field(classes: &Classes, class_name: &str, field: &str) -> Option<Ty> {
+    fn find(
+        classes: &Classes,
+        class_name: &str,
+        field: &str,
+        visited: &mut HashSet<String>,
+    ) -> Option<Ty> {
+        if !visited.insert(class_name.to_owned()) {
+            return None;
+        }
+        let class = classes.get(class_name)?;
+        class.static_fields.get(field).cloned().or_else(|| {
+            class.parents.iter().find_map(|parent| {
+                classes
+                    .contains_key(parent)
+                    .then(|| find(classes, parent, field, visited))
+                    .flatten()
+            })
+        })
+    }
+    find(classes, class_name, field, &mut HashSet::new())
+}
+fn class_method(classes: &Classes, class_name: &str, method: &str) -> Option<FnSig> {
+    fn find(
+        classes: &Classes,
+        class_name: &str,
+        method: &str,
+        visited: &mut HashSet<String>,
+    ) -> Option<FnSig> {
+        if !visited.insert(class_name.to_owned()) {
+            return None;
+        }
+        let class = classes.get(class_name)?;
+        class.methods.get(method).cloned().or_else(|| {
+            class.parents.iter().find_map(|parent| {
+                classes
+                    .contains_key(parent)
+                    .then(|| find(classes, parent, method, visited))
+                    .flatten()
+            })
+        })
+    }
+    find(classes, class_name, method, &mut HashSet::new())
 }
 
 fn declaration_type(
@@ -158,13 +277,19 @@ fn implicit_field_type(
     scopes: &[HashMap<String, Ty>],
     classes: &Classes,
 ) -> Option<Ty> {
-    let Ty::Struct(class_name) = lookup_type("self", scopes)? else {
-        return None;
+    let self_ty = lookup_type("self", scopes)?;
+    let class_name = match &self_ty {
+        Ty::Struct(name) | Ty::Applied(name, _) => name,
+        _ => return None,
     };
     if scopes.iter().skip(1).any(|scope| scope.contains_key(name)) {
         return None;
     }
-    class_field(classes, &class_name, name)
+    let mut bindings = HashMap::new();
+    if let (Some(class), Ty::Applied(_, arguments)) = (classes.get(class_name), &self_ty) {
+        bindings.extend(class.generic.iter().cloned().zip(arguments.iter().cloned()));
+    }
+    class_field(classes, class_name, name).map(|ty| substitute_type(&ty, &bindings))
 }
 
 fn is_implicit_field(name: &str, scopes: &[HashMap<String, Ty>], classes: &Classes) -> bool {
@@ -182,17 +307,29 @@ fn inferred_expr_type(
         Expr::Float(_) => Some(Ty::Float),
         Expr::Str(_) => Some(Ty::Str),
         Expr::Bool(_) => Some(Ty::Bool),
-        Expr::Var(name) => {
-            implicit_field_type(name, scopes, classes).or_else(|| lookup_type(name, scopes))
-        }
+        Expr::Var(name) => implicit_field_type(name, scopes, classes)
+            .or_else(|| lookup_type(name, scopes))
+            .or_else(|| {
+                classes
+                    .get(name)
+                    .is_some_and(|class| !class.is_interface)
+                    .then(|| Ty::Class(name.clone()))
+            }),
         Expr::New(name, _) => Some(Ty::Struct(name.clone())),
+        Expr::NewTyped(name, arguments, _) => Some(Ty::Applied(name.clone(), arguments.clone())),
         Expr::SuperCall(_) => Some(Ty::Void),
         Expr::SuperMethod(name, _) => {
-            let Ty::Struct(class_name) = lookup_type("self", scopes)? else {
-                return None;
+            let self_ty = lookup_type("self", scopes)?;
+            let class_name = match &self_ty {
+                Ty::Struct(name) | Ty::Applied(name, _) => name,
+                _ => return None,
             };
-            let parent = classes.get(&class_name)?.parent.as_deref()?;
-            class_method(classes, parent, name)
+            let parent = classes.get(class_name)?.parents.iter().find(|parent| {
+                classes
+                    .get(parent.as_str())
+                    .is_some_and(|parent| !parent.is_interface)
+            })?;
+            class_method(classes, parent, name).map(|sig| sig.ret)
         }
         Expr::Cast(_, ty) => Some(ty.clone()),
         Expr::Unary(_, value) => inferred_expr_type(value, scopes, function_returns, classes),
@@ -233,16 +370,37 @@ fn inferred_expr_type(
                 Ty::TableShape(shape) => Some(shape.named.get(name).cloned().unwrap_or(Ty::Any)),
                 Ty::Module(_) => package_value(base, name),
                 Ty::Struct(class_name) => class_field(classes, &class_name, name),
+                Ty::Class(class_name) => class_static_field(classes, &class_name, name),
+                Ty::Applied(class_name, arguments) => {
+                    let bindings = classes
+                        .get(&class_name)?
+                        .generic
+                        .iter()
+                        .cloned()
+                        .zip(arguments)
+                        .collect::<HashMap<_, _>>();
+                    class_field(classes, &class_name, name)
+                        .map(|ty| substitute_type(&ty, &bindings))
+                }
                 _ => None,
             }
         }
         Expr::MethodCall(base, name, _) => {
-            if let Some(Ty::Struct(class_name)) =
-                inferred_expr_type(base, scopes, function_returns, classes)
-            {
-                if let Some(ty) = class_method(classes, &class_name, name) {
-                    return Some(ty);
+            match inferred_expr_type(base, scopes, function_returns, classes)? {
+                Ty::Class(class_name) => {
+                    if class_static_method(classes, &class_name, name).is_some() {
+                        return Some(Ty::Void);
+                    }
                 }
+                Ty::Struct(class_name) | Ty::Applied(class_name, _) => {
+                    if class_method(classes, &class_name, name).is_some() {
+                        return Some(Ty::Void);
+                    }
+                    if class_static_method(classes, &class_name, name).is_some() {
+                        return Some(Ty::Void);
+                    }
+                }
+                _ => {}
             }
             package_return(base, name)
         }
@@ -444,6 +602,14 @@ fn emit_expr(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Expr::NewTyped(name, _, args) => format!(
+            "{}.new({})",
+            name,
+            args.iter()
+                .map(|arg| emit_expr(arg, scopes, function_returns, classes))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Expr::SuperCall(args) => {
             let args = args
                 .iter()
@@ -475,7 +641,17 @@ fn emit_expr(
         }
         Expr::MethodCall(base, name, args) => {
             let separator = match inferred_expr_type(base, scopes, function_returns, classes) {
-                Some(Ty::Struct(class_name))
+                Some(Ty::Class(class_name))
+                    if class_static_method(classes, &class_name, name).is_some() =>
+                {
+                    "."
+                }
+                Some(Ty::Struct(class_name) | Ty::Applied(class_name, _))
+                    if class_static_method(classes, &class_name, name).is_some() =>
+                {
+                    "."
+                }
+                Some(Ty::Struct(class_name) | Ty::Applied(class_name, _))
                     if class_method(classes, &class_name, name).is_some() =>
                 {
                     ":"
@@ -759,17 +935,14 @@ fn find_class<'a>(program: &'a [Top], name: &str) -> Option<&'a ClassDef> {
 }
 
 fn effective_constructor<'a>(program: &'a [Top], class: &'a ClassDef) -> Option<&'a Fun> {
-    let mut current = Some(class);
-    while let Some(definition) = current {
-        if let Some(constructor) = &definition.constructor {
-            return Some(constructor);
-        }
-        current = definition
-            .parent
-            .as_deref()
-            .and_then(|parent| find_class(program, parent));
+    if let Some(constructor) = &class.constructor {
+        return Some(constructor);
     }
-    None
+    class
+        .parents
+        .iter()
+        .find_map(|parent| find_class(program, parent))
+        .and_then(|parent| effective_constructor(program, parent))
 }
 
 fn param_list(function: Option<&Fun>) -> Vec<String> {
@@ -792,10 +965,18 @@ fn emit_fields(
     classes: &Classes,
 ) {
     for field in &class.fields {
+        if field.is_static || field.default.is_none() {
+            continue;
+        }
         out.push_str(&format!(
             "    self.{} = {}\n",
             field.name,
-            emit_expr(&field.default, scopes, function_returns, classes)
+            emit_expr(
+                field.default.as_ref().unwrap(),
+                scopes,
+                function_returns,
+                classes
+            )
         ));
     }
 }
@@ -807,9 +988,31 @@ fn emit_class(
     scopes: &mut Vec<HashMap<String, Ty>>,
     function_returns: &HashMap<String, Ty>,
     classes: &Classes,
-) {
+) -> () {
     let start = out.len();
-    if let Some(parent) = &class.parent {
+    let parents = class
+        .parents
+        .iter()
+        .filter(|parent| find_class(program, parent).is_some())
+        .cloned()
+        .collect::<Vec<_>>();
+    if parents.len() > 1 {
+        let mut chain = format!(
+            "    local value = rawget({}, k)\n    if value == nil then\n        value = {}[k]\n    end\n",
+            class.name, parents[0]
+        );
+        for parent in parents.iter().skip(1) {
+            chain.push_str(&format!(
+                "    if value == nil then\n        value = {}[k]\n    end\n",
+                parent
+            ));
+        }
+        chain.push_str("    return value\nend");
+        out.push_str(&format!(
+            "{} = setmetatable({{}}, {{ __index = function(t, k)\n{} }})\n",
+            class.name, chain
+        ));
+    } else if let Some(parent) = parents.first() {
         out.push_str(&format!(
             "{} = setmetatable({{}}, {{ __index = {} }})\n",
             class.name, parent
@@ -830,13 +1033,15 @@ fn emit_class(
         "    local self = setmetatable({{}}, {})\n",
         class.name
     ));
+    out.push_str("    __typelua_init_state[self] = {}\n");
     out.push_str(&format!("    self:__init({init_args})\n"));
     out.push_str("    return self\nend\n\n");
 
-    let init_signature = class
-        .constructor
-        .as_ref()
-        .or_else(|| class.parent.as_ref().and(effective));
+    let init_signature = class.constructor.as_ref().or_else(|| {
+        parents
+            .first()
+            .and_then(|parent| effective_constructor(program, find_class(program, parent)?))
+    });
     let init_params = param_list(init_signature).join(", ");
     let start = out.len();
     out.push_str(&format!("function {}:__init({init_params})\n", class.name));
@@ -845,22 +1050,35 @@ fn emit_class(
     } else {
         annotate_line(out, start, class.line, class.column);
     }
+    out.push_str(&format!(
+        "    if __typelua_init_state[self][{}] then return end\n    __typelua_init_state[self][{}] = true\n",
+        lua_str(&class.name),
+        lua_str(&class.name)
+    ));
     let mut method_scope = HashMap::new();
-    method_scope.insert("self".to_string(), Ty::Struct(class.name.clone()));
+    let self_ty = if class.generic.is_empty() {
+        Ty::Struct(class.name.clone())
+    } else {
+        Ty::Applied(
+            class.name.clone(),
+            class.generic.iter().cloned().map(Ty::Generic).collect(),
+        )
+    };
+    method_scope.insert("self".to_string(), self_ty.clone());
     if let Some(signature) = init_signature {
         for param in &signature.params {
             method_scope.insert(param.name.clone(), param.ty.clone());
         }
     }
     scopes.push(method_scope);
-    if let Some(parent) = &class.parent {
+    if let Some(parent) = parents.first() {
         out.push_str(&format!("    local super = {parent}\n"));
     }
     if let Some(constructor) = &class.constructor {
         emit_params(out, &constructor.params, scopes, function_returns, classes);
     }
     if let Some(constructor) = &class.constructor {
-        if class.parent.is_some() {
+        if !parents.is_empty() {
             if let Some(first) = constructor.body.first() {
                 emit_stmts(
                     std::slice::from_ref(first),
@@ -870,6 +1088,9 @@ fn emit_class(
                     function_returns,
                     classes,
                 );
+            }
+            for parent in parents.iter().skip(1) {
+                out.push_str(&format!("    {parent}.__init(self)\n"));
             }
             emit_fields(class, out, scopes, function_returns, classes);
             if constructor.body.len() > 1 {
@@ -887,12 +1108,15 @@ fn emit_class(
             emit_stmts(&constructor.body, out, 1, scopes, function_returns, classes);
         }
     } else {
-        if class.parent.is_some() {
+        if !parents.is_empty() {
             if init_args.is_empty() {
                 out.push_str("    super.__init(self)\n");
             } else {
                 out.push_str(&format!("    super.__init(self, {init_args})\n"));
             }
+        }
+        for parent in parents.iter().skip(1) {
+            out.push_str(&format!("    {parent}.__init(self)\n"));
         }
         emit_fields(class, out, scopes, function_returns, classes);
     }
@@ -907,6 +1131,23 @@ fn emit_class(
             .map(|param| param.name.clone())
             .collect::<Vec<_>>()
             .join(", ");
+        if method.is_static {
+            out.push_str(&format!(
+                "{}.{} = function({params})\n",
+                class.name, method.name
+            ));
+            annotate_line(out, start, method.line, method.column);
+            let mut static_scope = HashMap::new();
+            for param in &method.params {
+                static_scope.insert(param.name.clone(), param.ty.clone());
+            }
+            scopes.push(static_scope);
+            emit_params(out, &method.params, scopes, function_returns, classes);
+            emit_stmts(&method.body, out, 1, scopes, function_returns, classes);
+            scopes.pop();
+            out.push_str("end\n\n");
+            continue;
+        }
         out.push_str(&format!(
             "function {}:{}({params})\n",
             class.name, method.name
@@ -917,13 +1158,10 @@ fn emit_class(
                 .params
                 .iter()
                 .map(|param| (param.name.clone(), param.ty.clone()))
-                .chain(std::iter::once((
-                    "self".into(),
-                    Ty::Struct(class.name.clone()),
-                )))
+                .chain(std::iter::once(("self".into(), self_ty.clone())))
                 .collect(),
         );
-        if let Some(parent) = &class.parent {
+        if let Some(parent) = parents.first() {
             out.push_str(&format!("    local super = {parent}\n"));
         }
         emit_params(out, &method.params, scopes, function_returns, classes);
@@ -931,29 +1169,25 @@ fn emit_class(
         scopes.pop();
         out.push_str("end\n\n");
     }
+    for field in &class.fields {
+        if !field.is_static || field.default.is_none() {
+            continue;
+        }
+        out.push_str(&format!(
+            "{}.{} = {}\n",
+            class.name,
+            field.name,
+            emit_expr(
+                field.default.as_ref().unwrap(),
+                scopes,
+                function_returns,
+                classes
+            )
+        ));
+    }
 }
 
-fn ordered_classes(program: &[Top]) -> Vec<&ClassDef> {
-    fn visit<'a>(
-        name: &str,
-        definitions: &HashMap<String, &'a ClassDef>,
-        visiting: &mut HashSet<String>,
-        emitted: &mut HashSet<String>,
-        ordered: &mut Vec<&'a ClassDef>,
-    ) {
-        if emitted.contains(name) || !visiting.insert(name.to_string()) {
-            return;
-        }
-        if let Some(class) = definitions.get(name) {
-            if let Some(parent) = &class.parent {
-                visit(parent, definitions, visiting, emitted, ordered);
-            }
-            ordered.push(*class);
-        }
-        visiting.remove(name);
-        emitted.insert(name.to_string());
-    }
-
+fn ordered_classes(program: &[Top]) -> Vec<String> {
     let definitions = program
         .iter()
         .filter_map(|top| match top {
@@ -961,19 +1195,38 @@ fn ordered_classes(program: &[Top]) -> Vec<&ClassDef> {
             _ => None,
         })
         .collect::<HashMap<_, _>>();
+
+    fn visit<'a>(
+        name: &str,
+        definitions: &HashMap<String, &'a ClassDef>,
+        visiting: &mut HashSet<String>,
+        emitted: &mut HashSet<String>,
+        ordered: &mut Vec<String>,
+    ) {
+        if emitted.contains(name) || !visiting.insert(name.to_string()) {
+            return;
+        }
+        if let Some(class) = definitions.get(name) {
+            for parent in &class.parents {
+                visit(parent, definitions, visiting, emitted, ordered);
+            }
+            ordered.push(name.to_string());
+        }
+        visiting.remove(name);
+        emitted.insert(name.to_string());
+    }
+
     let mut ordered = Vec::new();
     let mut visiting = HashSet::new();
     let mut emitted = HashSet::new();
-    for top in program {
-        if let Top::Class(class) = top {
-            visit(
-                &class.name,
-                &definitions,
-                &mut visiting,
-                &mut emitted,
-                &mut ordered,
-            );
-        }
+    for (name, _) in definitions.iter() {
+        visit(
+            name,
+            &definitions,
+            &mut visiting,
+            &mut emitted,
+            &mut ordered,
+        );
     }
     ordered
 }
@@ -993,12 +1246,19 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
     let mut globals = HashMap::new();
     let mut function_returns = HashMap::new();
     let classes = collect_classes(program);
+    let mut class_names = Vec::new();
+    for top in program {
+        if let Top::Class(class) = top {
+            class_names.push(class.name.clone());
+        }
+    }
     let mut function_names = Vec::new();
     let mut class_names = Vec::new();
     let mut local_globals = Vec::new();
     let mut export_names = Vec::new();
     for top in program {
         match top {
+            Top::Interface(_) => {}
             Top::Fun(function) => {
                 function_returns.insert(function.name.clone(), function.ret.clone());
                 function_names.push(function.name.clone());
@@ -1042,15 +1302,30 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
     if !locals.is_empty() {
         out.push_str(&format!("local {}\n", locals.join(", ")));
     }
-    for class in ordered_classes(program) {
-        emit_class(
-            class,
-            program,
-            &mut out,
-            &mut scopes,
-            &function_returns,
-            &classes,
-        );
+    if !class_names.is_empty() {
+        out.push_str("local __typelua_init_state = setmetatable({}, { __mode = \"k\" })\n\n");
+    }
+    for class_name in ordered_classes(program) {
+        if let Some(def) = program.iter().find_map(|top| {
+            if let Top::Class(c) = top {
+                if c.name == class_name {
+                    Some(c)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }) {
+            emit_class(
+                def,
+                program,
+                &mut out,
+                &mut scopes,
+                &function_returns,
+                &classes,
+            );
+        }
     }
     for t in program {
         match t {
@@ -1123,6 +1398,7 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
             ),
             Top::Class(_) => {}
             Top::Struct(_) => {}
+            Top::Interface(_) => {}
             Top::Import { .. } => {}
         }
     }

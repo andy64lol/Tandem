@@ -182,6 +182,7 @@ fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
                         required,
                         ret: function.ret.clone(),
                         varargs: false,
+                        generic: function.generic.clone(),
                     }),
                 )?;
             }
@@ -231,13 +232,16 @@ fn collect_requires(program: &[Top], out: &mut Vec<String>) {
             Top::Stmt(stmt) => collect_stmt_requires(std::slice::from_ref(stmt), out),
             Top::Class(class) => {
                 for field in &class.fields {
-                    collect_expr_requires(&field.default, out);
+                    if let Some(default) = &field.default {
+                        collect_expr_requires(default, out);
+                    }
                 }
                 for callable in class.methods.iter().chain(class.constructor.iter()) {
                     collect_stmt_requires(&callable.body, out);
                 }
             }
             Top::Struct(_) => {}
+            Top::Interface(_) => {}
             Top::Import { .. } => {}
         }
     }
@@ -302,7 +306,7 @@ fn collect_expr_requires(expr: &crate::compiler::ast::Expr, out: &mut Vec<String
                 collect_expr_requires(arg, out);
             }
         }
-        Expr::New(_, args) => {
+        Expr::New(_, args) | Expr::NewTyped(_, _, args) => {
             for arg in args {
                 collect_expr_requires(arg, out);
             }

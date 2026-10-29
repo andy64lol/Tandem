@@ -34,6 +34,9 @@ pub(crate) enum Ty {
     Any,
     Auto,
     Struct(String),
+    Class(String),
+    Generic(String),
+    Applied(String, Vec<Ty>),
     TableShape(Box<TableShape>),
 }
 
@@ -71,6 +74,7 @@ pub(crate) enum Expr {
     Bin(Box<Expr>, String, Box<Expr>),
     Call(String, Vec<Expr>),
     New(String, Vec<Expr>),
+    NewTyped(String, Vec<Ty>, Vec<Expr>),
     SuperCall(Vec<Expr>),
     SuperMethod(String, Vec<Expr>),
     Member(Box<Expr>, String),
@@ -88,18 +92,28 @@ pub(crate) enum ListElement {
     Previous,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct FnSig {
     pub(crate) args: Vec<Ty>,
     pub(crate) required: usize,
     pub(crate) ret: Ty,
     pub(crate) varargs: bool,
+    pub(crate) generic: Vec<String>,
 }
 
 #[derive(Clone)]
 pub(crate) enum Export {
     Fn(FnSig),
     Var(Ty),
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct InterfaceDef {
+    pub(crate) name: String,
+    pub(crate) parents: Vec<String>,
+    pub(crate) methods: Vec<Fun>,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
 }
 
 #[derive(Clone, Default)]
@@ -221,6 +235,9 @@ pub(crate) struct Fun {
     pub(crate) column: usize,
     pub(crate) params: Vec<Param>,
     pub(crate) ret: Ty,
+    pub(crate) generic: Vec<String>,
+    pub(crate) is_static: bool,
+    pub(crate) is_private: bool,
     pub(crate) body: Vec<Stmt>,
 }
 #[derive(Clone, Debug)]
@@ -241,20 +258,63 @@ pub(crate) struct StructDef {
 pub(crate) struct ClassField {
     pub(crate) ty: Ty,
     pub(crate) name: String,
-    pub(crate) default: Expr,
+    pub(crate) default: Option<Expr>,
     pub(crate) line: usize,
     pub(crate) column: usize,
+    pub(crate) is_static: bool,
+    pub(crate) is_private: bool,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ClassDef {
     pub(crate) name: String,
-    pub(crate) parent: Option<String>,
+    pub(crate) parents: Vec<String>,
+    pub(crate) interfaces: Vec<String>,
+    pub(crate) generic: Vec<String>,
     pub(crate) line: usize,
     pub(crate) column: usize,
     pub(crate) fields: Vec<ClassField>,
     pub(crate) constructor: Option<Fun>,
     pub(crate) methods: Vec<Fun>,
+}
+
+pub(crate) fn substitute_type(ty: &Ty, bindings: &HashMap<String, Ty>) -> Ty {
+    match ty {
+        Ty::Generic(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Ty::List(element) => Ty::List(Box::new(substitute_type(element, bindings))),
+        Ty::Map(key, value) => Ty::Map(
+            Box::new(substitute_type(key, bindings)),
+            Box::new(substitute_type(value, bindings)),
+        ),
+        Ty::Tuple(Some(elements)) => Ty::Tuple(Some(
+            elements
+                .iter()
+                .map(|element| substitute_type(element, bindings))
+                .collect(),
+        )),
+        Ty::Applied(name, arguments) => Ty::Applied(
+            name.clone(),
+            arguments
+                .iter()
+                .map(|argument| substitute_type(argument, bindings))
+                .collect(),
+        ),
+        Ty::TableShape(shape) => {
+            let mut shape = (**shape).clone();
+            shape.named = shape
+                .named
+                .iter()
+                .map(|(name, ty)| (name.clone(), substitute_type(ty, bindings)))
+                .collect();
+            shape.positional = shape
+                .positional
+                .iter()
+                .map(|ty| substitute_type(ty, bindings))
+                .collect();
+            Ty::TableShape(Box::new(shape))
+        }
+        _ => ty.clone(),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -267,6 +327,7 @@ pub(crate) enum Top {
     Fun(Fun),
     Stmt(Stmt),
     Struct(StructDef),
+    Interface(InterfaceDef),
     Class(ClassDef),
 }
 
@@ -357,6 +418,7 @@ pub(crate) fn retyped_global_names(program: &[Top]) -> HashSet<String> {
                 }
             }
             Top::Struct(_) => {}
+            Top::Interface(_) => {}
             Top::Import { .. } => {}
         }
     }

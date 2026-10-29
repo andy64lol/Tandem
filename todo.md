@@ -13,11 +13,11 @@
 
 ### Classes and objects
 
-- [x] Support single inheritance with `class Child extends Parent`, `super(...)`, `super.method(...)`, overrides, and inherited constructors.
+- [x] Support multiple class and interface bases with `super(...)`, `super.method(...)`, overrides, and inherited constructors.
 - [x] Allow subclass instances where a parent class type is expected, with dynamic method dispatch.
-- [ ] Add static fields, static methods, and static initialization blocks.
+- [x] Add static fields and static methods.
 - [ ] Add property getters and setters.
-- [ ] Add private fields, private methods, and `#`-style encapsulation.
+- [x] Add private fields and private methods with `private` visibility.
 - [ ] Add `instanceof` and runtime class checks.
 - [ ] Add class expressions and anonymous classes.
 - [ ] Add computed method names and `super` property access.
@@ -25,12 +25,12 @@
 - [ ] Add abstract, final, and protected classes/members.
 - [ ] Infer class fields from constructor assignments when no initializer is written.
 - [ ] Export class definitions from compiled `.tlua` modules.
-- [ ] Add interfaces and protocol conformance checks.
+- [x] Add interfaces and protocol conformance checks.
 - [ ] Support method references and first-class methods.
 
 ### Types and language
 
-- [ ] Add generics for classes, functions, and collections.
+- [x] Add generics for classes and functions; collection type constructors can contain generic parameters.
 - [ ] Add closures and first-class functions.
 - [ ] Add optional types and null safety.
 - [ ] Add enums and discriminated unions.

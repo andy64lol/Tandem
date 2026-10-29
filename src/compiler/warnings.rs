@@ -89,13 +89,16 @@ impl WarnChecker {
                 Top::Stmt(stmt) => self.stmt(stmt, false),
                 Top::Class(class) => {
                     for field in &class.fields {
-                        self.expr(&field.default);
+                        if let Some(default) = &field.default {
+                            self.expr(default);
+                        }
                     }
                     for callable in class.methods.iter().chain(class.constructor.iter()) {
                         self.function(callable);
                     }
                 }
                 Top::Struct(_) => {}
+                Top::Interface(_) => {}
                 Top::Import { .. } => {}
             }
         }
@@ -215,7 +218,7 @@ impl WarnChecker {
                     self.expr(arg);
                 }
             }
-            Expr::New(_, args) => {
+            Expr::New(_, args) | Expr::NewTyped(_, _, args) => {
                 for arg in args {
                     self.expr(arg);
                 }
