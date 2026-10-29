@@ -46,3 +46,27 @@ jobs:
           name: typelua-linux-x86_64
           path: ${{ steps.package.outputs.executable }}
           if-no-files-found: error
+
+  package:
+    name: Package AMD64 Arch tarball
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download executable
+        uses: actions/download-artifact@v4
+        with:
+          name: typelua-linux-x86_64
+          path: dist
+
+      - name: Build Arch tarball
+        run: make package-arch-binary BINARY_PATH=dist/typelua-x86_64 ARCH=x86_64
+
+      - name: Upload Arch tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: typelua-linux-x86_64-arch
+          path: dist/*.tar.gz
+          if-no-files-found: error
