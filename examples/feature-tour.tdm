@@ -1,0 +1,169 @@
+// Tandem 0.1.2 feature tour.
+// Demonstrates optional types, closures, enums, unions, pattern matching,
+// operator overloading, properties, instanceof, anonymous classes, computed
+// method names, field inference, mixins, traits, abstract/final/protected,
+// and exporting classes from modules.
+
+import base;
+import math;
+
+// ---------- Optional types and null safety ----------
+int? maybe = null;
+int? present = 7;
+int unwrapped = present!;
+int fallback = maybe ?? 42;
+
+fn describe(int? value) -> str {
+    if (value != null) {
+        return "value=" + tostring(value);
+    }
+    return "no value";
+}
+
+// ---------- Closures and first-class functions ----------
+fn(int) -> int double = fn(int x) -> int { return x * 2; };
+int doubled = double(21);
+
+fn apply(fn(int) -> int f, int value) -> int {
+    return f(value);
+}
+int applied = apply(double, 5);
+
+class Counter {
+    int count = 0;
+    fn increment() { count += 1; }
+    fn value() -> int { return count; }
+}
+local class counter = new Counter;
+counter.increment();
+fn() -> int readCounter = &counter.value;
+int counted = readCounter();
+
+// ---------- Enums ----------
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+Color color = Color.Green;
+str colorName = match color {
+    Color.Red => "red",
+    Color.Green => "green",
+    _ => "other",
+};
+
+// ---------- Discriminated unions ----------
+union Shape {
+    Circle(float radius),
+    Square(float side),
+    Empty,
+}
+Shape shape = Shape.Circle(2.0);
+float area = match shape {
+    Shape.Circle(r) => 3.14 * r * r,
+    Shape.Square(s) => s * s,
+    Shape.Empty => 0.0,
+};
+
+// ---------- Operator overloading ----------
+class Money {
+    int amount = 0;
+    constructor(int amount) { self.amount = amount; }
+    fn operator+(Money other) -> Money { return new Money(amount + other.amount); }
+    fn operator==(Money other) -> bool { return amount == other.amount; }
+}
+local class price = new Money(5);
+local class otherPrice = new Money(7);
+Money total = price + otherPrice;
+int sum = total.amount;
+
+// ---------- Properties ----------
+class Player {
+    int hp = 10;
+    get health() -> int { return hp * 2; }
+    set health(int value) { hp = value / 2; }
+}
+local class player = new Player;
+int health = player.health;
+player.health = 30;
+int updated = player.health;
+
+// ---------- instanceof ----------
+class Animal { fn speak() -> str { return "..."; } }
+class Dog extends Animal { fn speak() -> str { return "woof"; } }
+local class pet = new Dog;
+bool isDog = pet instanceof Dog;
+bool isAnimal = pet instanceof Animal;
+
+// ---------- super property access ----------
+class Base { static int created = 0; }
+class Derived extends Base {
+    constructor() { super(); }
+    fn count() -> int { return super.created; }
+}
+
+// ---------- Abstract, final, protected ----------
+abstract class Shape2 {
+    fn area() -> float;
+}
+class Circle2 extends Shape2 {
+    float radius = 1.0;
+    fn area() -> float { return 3.14 * radius * radius; }
+}
+final class Sealed { fn value() -> int { return 1; } }
+
+// ---------- Mixins and traits ----------
+mixin Barker {
+    fn bark() -> str { return "woof"; }
+}
+trait Greeter {
+    fn greet() -> str;
+    fn hello() -> str { return "hi"; }
+}
+class Dog2 extends Animal implements Greeter {
+    use Barker;
+    fn greet() -> str { return "hello"; }
+}
+local class dog2 = new Dog2;
+str barked = dog2.bark();
+str greeted = dog2.greet();
+str hello = dog2.hello();
+
+// ---------- Anonymous classes ----------
+local class anonymous = class {
+    int value = 3;
+    fn get() -> int { return value; }
+};
+int anonymousValue = anonymous.get();
+
+// ---------- Computed method names ----------
+class Computed {
+    fn ("get" + "Value")() -> int { return 5; }
+}
+local class computed = new Computed;
+int computedValue = computed.getValue();
+
+// ---------- Field inference from constructor ----------
+class Inferred {
+    constructor() { self.name = "auto"; }
+}
+local class inferred = new Inferred;
+str inferredName = inferred.name;
+
+// ---------- Optional + null in a match ----------
+int? nullable = 42;
+str nullResult = match nullable {
+    null => "none",
+    _ => "some",
+};
+
+print("feature tour ok");
+print(describe(nullable));
+print(colorName);
+print(area);
+print(sum);
+print(health, updated);
+print(isDog, isAnimal);
+print(barked, greeted, hello);
+print(anonymousValue, computedValue, inferredName);
+print(nullResult);

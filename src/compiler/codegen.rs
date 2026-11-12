@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::compiler::ast::{
-    parse_printf_format, retyped_global_names, substitute_type, ClassDef, Expr, FnSig, FormatPart,
-    Fun, ListElement, Stmt, StmtKind, TableShape, Top, Ty, VarDecl,
+    parse_printf_format, retyped_global_names, substitute_type, ClassDef, EnumInfo, Expr, FnSig,
+    FormatPart, Fun, ListElement, Stmt, StmtKind, TableShape, Top, Ty, UnionInfo, VarDecl,
 };
 use crate::compiler::stdlib;
 
@@ -13,11 +13,55 @@ struct ClassInfo {
     generic: Vec<String>,
     fields: HashMap<String, Ty>,
     methods: HashMap<String, FnSig>,
+    getters: Vec<String>,
+    setters: Vec<String>,
     static_fields: HashMap<String, Ty>,
     static_methods: HashMap<String, FnSig>,
 }
 
 type Classes = HashMap<String, ClassInfo>;
+
+struct Ctx<'a> {
+    classes: &'a Classes,
+    enums: &'a HashMap<String, EnumInfo>,
+    unions: &'a HashMap<String, UnionInfo>,
+}
+
+fn collect_enums(program: &[Top]) -> HashMap<String, EnumInfo> {
+    let mut map = HashMap::new();
+    for top in program {
+        let Top::Enum(definition) = top else {
+            continue;
+        };
+        let mut variants = HashMap::new();
+        for variant in &definition.variants {
+            variants.insert(variant.name.clone(), variant.value);
+        }
+        map.insert(
+            definition.name.clone(),
+            EnumInfo { variants },
+        );
+    }
+    map
+}
+
+fn collect_unions(program: &[Top]) -> HashMap<String, UnionInfo> {
+    let mut map = HashMap::new();
+    for top in program {
+        let Top::Union(definition) = top else {
+            continue;
+        };
+        let mut variants = HashMap::new();
+        for variant in &definition.variants {
+            variants.insert(variant.name.clone(), variant.payload.clone());
+        }
+        map.insert(
+            definition.name.clone(),
+            UnionInfo { variants },
+        );
+    }
+    map
+}
 
 fn method_signature(method: &Fun) -> FnSig {
     FnSig {
@@ -34,12 +78,12 @@ fn method_signature(method: &Fun) -> FnSig {
 }
 
 fn collect_classes(program: &[Top]) -> Classes {
-    let mut classes = Classes::new();
+    let mut map = Classes::new();
     for top in program {
         let Top::Class(definition) = top else {
             continue;
         };
-        classes.insert(
+        map.insert(
             definition.name.clone(),
             ClassInfo {
                 is_interface: false,
@@ -54,8 +98,20 @@ fn collect_classes(program: &[Top]) -> Classes {
                 methods: definition
                     .methods
                     .iter()
-                    .filter(|method| !method.is_static)
+                    .filter(|method| !method.is_static && !method.is_getter && !method.is_setter)
                     .map(|method| (method.name.clone(), method_signature(method)))
+                    .collect(),
+                getters: definition
+                    .methods
+                    .iter()
+                    .filter(|method| method.is_getter)
+                    .map(|method| method.name.clone())
+                    .collect(),
+                setters: definition
+                    .methods
+                    .iter()
+                    .filter(|method| method.is_setter)
+                    .map(|method| method.name.clone())
                     .collect(),
                 static_fields: definition
                     .fields
@@ -76,7 +132,7 @@ fn collect_classes(program: &[Top]) -> Classes {
         let Top::Interface(definition) = top else {
             continue;
         };
-        classes.insert(
+        map.insert(
             definition.name.clone(),
             ClassInfo {
                 is_interface: true,
@@ -90,12 +146,12 @@ fn collect_classes(program: &[Top]) -> Classes {
             },
         );
     }
-    classes
+    map
 }
 
-fn class_field(classes: &Classes, class_name: &str, field: &str) -> Option<Ty> {
+fn class_field(ctx: &Ctx, class_name: &str, field: &str) -> Option<Ty> {
     fn find(
-        classes: &Classes,
+        ctx: &Ctx,
         class_name: &str,
         field: &str,
         visited: &mut HashSet<String>,
@@ -103,22 +159,22 @@ fn class_field(classes: &Classes, class_name: &str, field: &str) -> Option<Ty> {
         if !visited.insert(class_name.to_owned()) {
             return None;
         }
-        let class = classes.get(class_name)?;
+        let class = ctx.classes.get(class_name)?;
         class.fields.get(field).cloned().or_else(|| {
             class.parents.iter().find_map(|parent| {
-                classes
+                ctx.classes
                     .contains_key(parent)
-                    .then(|| find(classes, parent, field, visited))
+                    .then(|| find(ctx, parent, field, visited))
                     .flatten()
             })
         })
     }
-    find(classes, class_name, field, &mut HashSet::new())
+    find(ctx, class_name, field, &mut HashSet::new())
 }
 
-fn class_static_method(classes: &Classes, class_name: &str, method: &str) -> Option<FnSig> {
+fn class_static_method(ctx: &Ctx, class_name: &str, method: &str) -> Option<FnSig> {
     fn find(
-        classes: &Classes,
+        ctx: &Ctx,
         class_name: &str,
         method: &str,
         visited: &mut HashSet<String>,
@@ -126,22 +182,22 @@ fn class_static_method(classes: &Classes, class_name: &str, method: &str) -> Opt
         if !visited.insert(class_name.to_owned()) {
             return None;
         }
-        let class = classes.get(class_name)?;
+        let class = ctx.classes.get(class_name)?;
         class.static_methods.get(method).cloned().or_else(|| {
             class.parents.iter().find_map(|parent| {
-                classes
+                ctx.classes
                     .contains_key(parent)
-                    .then(|| find(classes, parent, method, visited))
+                    .then(|| find(ctx, parent, method, visited))
                     .flatten()
             })
         })
     }
-    find(classes, class_name, method, &mut HashSet::new())
+    find(ctx, class_name, method, &mut HashSet::new())
 }
 
-fn class_static_field(classes: &Classes, class_name: &str, field: &str) -> Option<Ty> {
+fn class_static_field(ctx: &Ctx, class_name: &str, field: &str) -> Option<Ty> {
     fn find(
-        classes: &Classes,
+        ctx: &Ctx,
         class_name: &str,
         field: &str,
         visited: &mut HashSet<String>,
@@ -149,21 +205,21 @@ fn class_static_field(classes: &Classes, class_name: &str, field: &str) -> Optio
         if !visited.insert(class_name.to_owned()) {
             return None;
         }
-        let class = classes.get(class_name)?;
+        let class = ctx.classes.get(class_name)?;
         class.static_fields.get(field).cloned().or_else(|| {
             class.parents.iter().find_map(|parent| {
-                classes
+                ctx.classes
                     .contains_key(parent)
-                    .then(|| find(classes, parent, field, visited))
+                    .then(|| find(ctx, parent, field, visited))
                     .flatten()
             })
         })
     }
-    find(classes, class_name, field, &mut HashSet::new())
+    find(ctx, class_name, field, &mut HashSet::new())
 }
-fn class_method(classes: &Classes, class_name: &str, method: &str) -> Option<FnSig> {
+fn class_method(ctx: &Ctx, class_name: &str, method: &str) -> Option<FnSig> {
     fn find(
-        classes: &Classes,
+        ctx: &Ctx,
         class_name: &str,
         method: &str,
         visited: &mut HashSet<String>,
@@ -171,33 +227,33 @@ fn class_method(classes: &Classes, class_name: &str, method: &str) -> Option<FnS
         if !visited.insert(class_name.to_owned()) {
             return None;
         }
-        let class = classes.get(class_name)?;
+        let class = ctx.classes.get(class_name)?;
         class.methods.get(method).cloned().or_else(|| {
             class.parents.iter().find_map(|parent| {
-                classes
+                ctx.classes
                     .contains_key(parent)
-                    .then(|| find(classes, parent, method, visited))
+                    .then(|| find(ctx, parent, method, visited))
                     .flatten()
             })
         })
     }
-    find(classes, class_name, method, &mut HashSet::new())
+    find(ctx, class_name, method, &mut HashSet::new())
 }
 
 fn declaration_type(
     decl: &VarDecl,
     scopes: &[HashMap<String, Ty>],
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) -> Ty {
     match &decl.ty {
         Ty::Auto => {
-            inferred_value_type(&decl.value, scopes, function_returns, classes).unwrap_or(Ty::Any)
+            inferred_value_type(&decl.value, scopes, function_returns, ctx).unwrap_or(Ty::Any)
         }
         Ty::Table => {
-            inferred_value_type(&decl.value, scopes, function_returns, classes).unwrap_or(Ty::Table)
+            inferred_value_type(&decl.value, scopes, function_returns, ctx).unwrap_or(Ty::Table)
         }
-        Ty::Tuple(None) => inferred_expr_type(&decl.value, scopes, function_returns, classes)
+        Ty::Tuple(None) => inferred_expr_type(&decl.value, scopes, function_returns, ctx)
             .unwrap_or(Ty::Tuple(None)),
         declared => declared.clone(),
     }
@@ -207,7 +263,7 @@ fn table_shape(
     expr: &Expr,
     scopes: &[HashMap<String, Ty>],
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) -> Option<TableShape> {
     let Expr::Table(fields) = expr else {
         return None;
@@ -215,7 +271,7 @@ fn table_shape(
     let mut shape = TableShape::default();
     for (name, value) in fields {
         let mut ty =
-            inferred_expr_type(value, scopes, function_returns, classes).unwrap_or(Ty::Any);
+            inferred_expr_type(value, scopes, function_returns, ctx).unwrap_or(Ty::Any);
         if matches!(ty, Ty::TableShape(_)) {
             ty = Ty::Table;
         }
@@ -233,11 +289,11 @@ fn inferred_value_type(
     expr: &Expr,
     scopes: &[HashMap<String, Ty>],
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) -> Option<Ty> {
-    table_shape(expr, scopes, function_returns, classes)
+    table_shape(expr, scopes, function_returns, ctx)
         .map(|shape| Ty::TableShape(Box::new(shape)))
-        .or_else(|| inferred_expr_type(expr, scopes, function_returns, classes))
+        .or_else(|| inferred_expr_type(expr, scopes, function_returns, ctx))
 }
 
 fn lua_str(s: &str) -> String {
@@ -275,7 +331,7 @@ fn update_type(name: &str, ty: Ty, scopes: &mut [HashMap<String, Ty>]) {
 fn implicit_field_type(
     name: &str,
     scopes: &[HashMap<String, Ty>],
-    classes: &Classes,
+    ctx: &Ctx,
 ) -> Option<Ty> {
     let self_ty = lookup_type("self", scopes)?;
     let class_name = match &self_ty {
@@ -286,34 +342,46 @@ fn implicit_field_type(
         return None;
     }
     let mut bindings = HashMap::new();
-    if let (Some(class), Ty::Applied(_, arguments)) = (classes.get(class_name), &self_ty) {
+    if let (Some(class), Ty::Applied(_, arguments)) = (ctx.classes.get(class_name), &self_ty) {
         bindings.extend(class.generic.iter().cloned().zip(arguments.iter().cloned()));
     }
-    class_field(classes, class_name, name).map(|ty| substitute_type(&ty, &bindings))
+    class_field(ctx, class_name, name).map(|ty| substitute_type(&ty, &bindings))
 }
 
-fn is_implicit_field(name: &str, scopes: &[HashMap<String, Ty>], classes: &Classes) -> bool {
-    implicit_field_type(name, scopes, classes).is_some()
+fn is_implicit_field(name: &str, scopes: &[HashMap<String, Ty>], ctx: &Ctx) -> bool {
+    implicit_field_type(name, scopes, ctx).is_some()
 }
 
 fn inferred_expr_type(
     expr: &Expr,
     scopes: &[HashMap<String, Ty>],
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) -> Option<Ty> {
     match expr {
         Expr::Int(_) => Some(Ty::Int),
         Expr::Float(_) => Some(Ty::Float),
         Expr::Str(_) => Some(Ty::Str),
         Expr::Bool(_) => Some(Ty::Bool),
-        Expr::Var(name) => implicit_field_type(name, scopes, classes)
+        Expr::Null => Some(Ty::Null),
+        Expr::CallValue(callee, _) => inferred_expr_type(callee, scopes, function_returns, ctx),
+        Expr::Var(name) => implicit_field_type(name, scopes, ctx)
             .or_else(|| lookup_type(name, scopes))
             .or_else(|| {
-                classes
+                ctx.classes
                     .get(name)
                     .is_some_and(|class| !class.is_interface)
                     .then(|| Ty::Class(name.clone()))
+            })
+            .or_else(|| {
+                ctx.enums
+                    .contains_key(name)
+                    .then(|| Ty::Enum(name.clone()))
+            })
+            .or_else(|| {
+                ctx.unions
+                    .contains_key(name)
+                    .then(|| Ty::Union(name.clone()))
             }),
         Expr::New(name, _) => Some(Ty::Struct(name.clone())),
         Expr::NewTyped(name, arguments, _) => Some(Ty::Applied(name.clone(), arguments.clone())),
@@ -324,18 +392,18 @@ fn inferred_expr_type(
                 Ty::Struct(name) | Ty::Applied(name, _) => name,
                 _ => return None,
             };
-            let parent = classes.get(class_name)?.parents.iter().find(|parent| {
-                classes
+            let parent = ctx.classes.get(class_name)?.parents.iter().find(|parent| {
+                ctx.classes
                     .get(parent.as_str())
                     .is_some_and(|parent| !parent.is_interface)
             })?;
-            class_method(classes, parent, name).map(|sig| sig.ret)
+            class_method(ctx, parent, name).map(|sig| sig.ret)
         }
         Expr::Cast(_, ty) => Some(ty.clone()),
-        Expr::Unary(_, value) => inferred_expr_type(value, scopes, function_returns, classes),
+        Expr::Unary(_, value) => inferred_expr_type(value, scopes, function_returns, ctx),
         Expr::Bin(left, op, right) => {
-            let left_ty = inferred_expr_type(left, scopes, function_returns, classes)?;
-            let right_ty = inferred_expr_type(right, scopes, function_returns, classes)?;
+            let left_ty = inferred_expr_type(left, scopes, function_returns, ctx)?;
+            let right_ty = inferred_expr_type(right, scopes, function_returns, ctx)?;
             if left_ty == right_ty
                 && (left_ty == Ty::Str
                     || left_ty == Ty::Int
@@ -365,39 +433,50 @@ fn inferred_expr_type(
             .cloned()
             .or_else(|| stdlib_return(name)),
         Expr::Member(base, name) => {
-            match inferred_expr_type(base, scopes, function_returns, classes)? {
+            match inferred_expr_type(base, scopes, function_returns, ctx)? {
                 Ty::Map(key_ty, value_ty) if *key_ty == Ty::Str => Some(*value_ty),
                 Ty::TableShape(shape) => Some(shape.named.get(name).cloned().unwrap_or(Ty::Any)),
                 Ty::Module(_) => package_value(base, name),
-                Ty::Struct(class_name) => class_field(classes, &class_name, name),
-                Ty::Class(class_name) => class_static_field(classes, &class_name, name),
+                Ty::Struct(class_name) => class_field(ctx, &class_name, name),
+                Ty::Class(class_name) => class_static_field(ctx, &class_name, name),
+                Ty::Enum(enum_name) => Some(Ty::Enum(enum_name.clone())),
+                Ty::Union(union_name) => Some(Ty::Union(union_name.clone())),
                 Ty::Applied(class_name, arguments) => {
-                    let bindings = classes
+                    let bindings = ctx.classes
                         .get(&class_name)?
                         .generic
                         .iter()
                         .cloned()
                         .zip(arguments)
                         .collect::<HashMap<_, _>>();
-                    class_field(classes, &class_name, name)
+                    class_field(ctx, &class_name, name)
                         .map(|ty| substitute_type(&ty, &bindings))
                 }
                 _ => None,
             }
         }
         Expr::MethodCall(base, name, _) => {
-            match inferred_expr_type(base, scopes, function_returns, classes)? {
+            match inferred_expr_type(base, scopes, function_returns, ctx)? {
                 Ty::Class(class_name) => {
-                    if class_static_method(classes, &class_name, name).is_some() {
+                    if class_static_method(ctx, &class_name, name).is_some() {
                         return Some(Ty::Void);
                     }
                 }
                 Ty::Struct(class_name) | Ty::Applied(class_name, _) => {
-                    if class_method(classes, &class_name, name).is_some() {
+                    if class_method(ctx, &class_name, name).is_some() {
                         return Some(Ty::Void);
                     }
-                    if class_static_method(classes, &class_name, name).is_some() {
+                    if class_static_method(ctx, &class_name, name).is_some() {
                         return Some(Ty::Void);
+                    }
+                }
+                Ty::Union(union_name) => {
+                    if ctx
+                        .unions
+                        .get(&union_name)
+                        .is_some_and(|info| info.variants.contains_key(name))
+                    {
+                        return Some(Ty::Union(union_name));
                     }
                 }
                 _ => {}
@@ -405,7 +484,7 @@ fn inferred_expr_type(
             package_return(base, name)
         }
         Expr::Index(base, index) => {
-            match inferred_expr_type(base, scopes, function_returns, classes)? {
+            match inferred_expr_type(base, scopes, function_returns, ctx)? {
                 Ty::List(element_ty) => Some(*element_ty),
                 Ty::Map(_, value_ty) => Some(*value_ty),
                 Ty::Tuple(Some(elements)) => match index.as_ref() {
@@ -432,7 +511,7 @@ fn inferred_expr_type(
                 let ListElement::Value(value) = value else {
                     return None;
                 };
-                let ty = inferred_expr_type(value, scopes, function_returns, classes)?;
+                let ty = inferred_expr_type(value, scopes, function_returns, ctx)?;
                 if element_ty.as_ref().is_some_and(|element| element != &ty) {
                     return None;
                 }
@@ -442,9 +521,72 @@ fn inferred_expr_type(
         }
         Expr::Tuple(values) => values
             .iter()
-            .map(|value| inferred_expr_type(value, scopes, function_returns, classes))
+            .map(|value| inferred_expr_type(value, scopes, function_returns, ctx))
             .collect::<Option<Vec<_>>>()
             .map(|types| Ty::Tuple(Some(types))),
+        Expr::Coalesce(left, _) => match inferred_expr_type(left, scopes, function_returns, ctx)? {
+            Ty::Optional(inner) => Some(*inner),
+            other => Some(other),
+        },
+        Expr::Unwrap(value) => {
+            match inferred_expr_type(value, scopes, function_returns, ctx)? {
+                Ty::Optional(inner) => Some(*inner),
+                _ => None,
+            }
+        }
+        Expr::SafeMember(base, name) => {
+            let base_ty = inferred_expr_type(base, scopes, function_returns, ctx)?;
+            let Ty::Optional(inner) = base_ty else {
+                return None;
+            };
+            let member = match *inner {
+                Ty::Struct(ref class_name) => class_field(ctx, class_name, name),
+                Ty::Applied(ref class_name, ref arguments) => {
+                    let bindings = ctx
+                        .classes
+                        .get(class_name)?
+                        .generic
+                        .iter()
+                        .cloned()
+                        .zip(arguments.iter().cloned())
+                        .collect::<HashMap<_, _>>();
+                    class_field(ctx, class_name, name)
+                        .map(|ty| substitute_type(&ty, &bindings))
+                }
+                Ty::Map(ref key_ty, ref value_ty) if **key_ty == Ty::Str => {
+                    Some((**value_ty).clone())
+                }
+                Ty::TableShape(ref shape) => {
+                    Some(shape.named.get(name).cloned().unwrap_or(Ty::Any))
+                }
+                _ => None,
+            }?;
+            Some(Ty::Optional(Box::new(member)))
+        }
+        Expr::InstanceOf(_, _) => Some(Ty::Bool),
+        Expr::SuperMember(name) => {
+            let self_ty = lookup_type("self", scopes)?;
+            let class_name = match &self_ty {
+                Ty::Struct(name) | Ty::Applied(name, _) => name.clone(),
+                _ => return None,
+            };
+            let parent = ctx
+                .classes
+                .get(&class_name)?
+                .parents
+                .iter()
+                .find(|parent| {
+                    ctx.classes
+                        .get(parent.as_str())
+                        .is_some_and(|parent| !parent.is_interface)
+                })?;
+            class_static_field(ctx, parent, name)
+        }
+        Expr::Match(expression) => {
+            let arm = expression.arms.first()?;
+            inferred_expr_type(&arm.body, scopes, function_returns, ctx)
+        }
+        Expr::Lambda(_) | Expr::FuncRef(_) | Expr::MethodRef(_) => None,
     }
 }
 
@@ -496,33 +638,33 @@ fn is_string_expr(
     expr: &Expr,
     scopes: &[HashMap<String, Ty>],
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) -> bool {
     match expr {
         Expr::Str(_) => true,
         Expr::Var(_) => {
             matches!(
-                inferred_expr_type(expr, scopes, function_returns, classes),
+                inferred_expr_type(expr, scopes, function_returns, ctx),
                 Some(Ty::Str)
             )
         }
         Expr::Bin(left, op, right) if op == "+" || op == "," => {
-            is_string_expr(left, scopes, function_returns, classes)
-                && is_string_expr(right, scopes, function_returns, classes)
+            is_string_expr(left, scopes, function_returns, ctx)
+                && is_string_expr(right, scopes, function_returns, ctx)
         }
         Expr::Call(name, _) => {
             function_returns.get(name) == Some(&Ty::Str) || stdlib_return(name) == Some(Ty::Str)
         }
         Expr::Cast(_, Ty::Str) => true,
         Expr::Member(base, name) => {
-            inferred_expr_type(expr, scopes, function_returns, classes) == Some(Ty::Str)
+            inferred_expr_type(expr, scopes, function_returns, ctx) == Some(Ty::Str)
                 || package_value(base, name) == Some(Ty::Str)
         }
         Expr::Index(_, _) => {
-            inferred_expr_type(expr, scopes, function_returns, classes) == Some(Ty::Str)
+            inferred_expr_type(expr, scopes, function_returns, ctx) == Some(Ty::Str)
         }
         Expr::MethodCall(base, name, _) => {
-            inferred_expr_type(expr, scopes, function_returns, classes) == Some(Ty::Str)
+            inferred_expr_type(expr, scopes, function_returns, ctx) == Some(Ty::Str)
                 || package_return(base, name) == Some(Ty::Str)
         }
         _ => false,
@@ -533,15 +675,16 @@ fn emit_expr(
     e: &Expr,
     scopes: &[HashMap<String, Ty>],
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) -> String {
     match e {
         Expr::Int(n) => n.to_string(),
         Expr::Float(n) => n.to_string(),
         Expr::Str(s) => lua_str(s),
         Expr::Bool(b) => b.to_string(),
+        Expr::Null => "nil".to_string(),
         Expr::Var(n) => {
-            if is_implicit_field(n, scopes, classes) {
+            if is_implicit_field(n, scopes, ctx) {
                 format!("self.{n}")
             } else {
                 n.clone()
@@ -550,15 +693,24 @@ fn emit_expr(
         Expr::Unary(op, x) => format!(
             "({}{})",
             if op == "!" { "not " } else { op },
-            emit_expr(x, scopes, function_returns, classes)
+            emit_expr(x, scopes, function_returns, ctx)
         ),
         Expr::Bin(a, op, b) => {
+            if operator_class(a, scopes, function_returns, ctx, op).is_some() {
+                return format!(
+                    "{}:{}({})",
+                    emit_expr(a, scopes, function_returns, ctx),
+                    lua_method_name(&format!("operator{op}")),
+                    emit_expr(b, scopes, function_returns, ctx)
+                );
+            }
             let lua_op = match op.as_str() {
                 "&&" => "and",
                 "||" => "or",
                 "," => "..",
-                "+" if is_string_expr(a, scopes, function_returns, classes)
-                    && is_string_expr(b, scopes, function_returns, classes) =>
+                "!=" => "~=",
+                "+" if is_string_expr(a, scopes, function_returns, ctx)
+                    && is_string_expr(b, scopes, function_returns, ctx) =>
                 {
                     ".."
                 }
@@ -566,9 +718,9 @@ fn emit_expr(
             };
             format!(
                 "({} {} {})",
-                emit_expr(a, scopes, function_returns, classes),
+                emit_expr(a, scopes, function_returns, ctx),
                 lua_op,
-                emit_expr(b, scopes, function_returns, classes)
+                emit_expr(b, scopes, function_returns, ctx)
             )
         }
         Expr::Call(n, a) if n == "printf" => {
@@ -590,7 +742,7 @@ fn emit_expr(
             "{}({})",
             if n == "print" { "print" } else { n },
             a.iter()
-                .map(|arg| emit_expr(arg, scopes, function_returns, classes))
+                .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -598,7 +750,7 @@ fn emit_expr(
             "{}.new({})",
             name,
             args.iter()
-                .map(|arg| emit_expr(arg, scopes, function_returns, classes))
+                .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -606,14 +758,14 @@ fn emit_expr(
             "{}.new({})",
             name,
             args.iter()
-                .map(|arg| emit_expr(arg, scopes, function_returns, classes))
+                .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
         Expr::SuperCall(args) => {
             let args = args
                 .iter()
-                .map(|arg| emit_expr(arg, scopes, function_returns, classes))
+                .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
                 .collect::<Vec<_>>();
             if args.is_empty() {
                 "super.__init(self)".to_string()
@@ -624,7 +776,7 @@ fn emit_expr(
         Expr::SuperMethod(name, args) => {
             let args = args
                 .iter()
-                .map(|arg| emit_expr(arg, scopes, function_returns, classes))
+                .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
                 .collect::<Vec<_>>();
             if args.is_empty() {
                 format!("super.{name}(self)")
@@ -633,54 +785,98 @@ fn emit_expr(
             }
         }
         Expr::Member(base, name) => {
+            if let Expr::Var(enum_name) = base.as_ref() {
+                if let Some(info) = ctx.enums.get(enum_name) {
+                    if let Some(value) = info.variants.get(name) {
+                        return value.to_string();
+                    }
+                }
+            }
+            if getter_class(base, scopes, function_returns, ctx, name).is_some() {
+                return format!(
+                    "{}.__tandem_getters.{}({})",
+                    emit_expr(base, scopes, function_returns, ctx),
+                    name,
+                    emit_expr(base, scopes, function_returns, ctx)
+                );
+            }
             format!(
                 "{}.{}",
-                emit_expr(base, scopes, function_returns, classes),
+                emit_expr(base, scopes, function_returns, ctx),
                 name
             )
         }
+        Expr::SafeMember(base, name) => format!(
+            "(function(v) if v == nil then return nil end return v.{name} end)({})",
+            emit_expr(base, scopes, function_returns, ctx)
+        ),
         Expr::MethodCall(base, name, args) => {
-            let separator = match inferred_expr_type(base, scopes, function_returns, classes) {
+            let base_ty = inferred_expr_type(base, scopes, function_returns, ctx);
+            if let Some(Ty::Union(union_name)) = &base_ty {
+                let payload = ctx
+                    .unions
+                    .get(union_name)
+                    .and_then(|info| info.variants.get(name).cloned());
+                let value = match payload {
+                    Some(Some(_)) => {
+                        let argument = args
+                            .iter()
+                            .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(", __tdm_value = {argument}")
+                    }
+                    Some(None) => String::new(),
+                    None => String::new(),
+                };
+                return format!(
+                    "{{ __tdm_variant = {}{value} }}",
+                    lua_str(name)
+                );
+            }
+            let separator = match base_ty {
                 Some(Ty::Class(class_name))
-                    if class_static_method(classes, &class_name, name).is_some() =>
+                    if class_static_method(ctx, &class_name, name).is_some() =>
                 {
                     "."
                 }
                 Some(Ty::Struct(class_name) | Ty::Applied(class_name, _))
-                    if class_static_method(classes, &class_name, name).is_some() =>
+                    if class_static_method(ctx, &class_name, name).is_some() =>
                 {
                     "."
                 }
                 Some(Ty::Struct(class_name) | Ty::Applied(class_name, _))
-                    if class_method(classes, &class_name, name).is_some() =>
+                    if class_method(ctx, &class_name, name).is_some() =>
                 {
                     ":"
                 }
+                Some(Ty::Struct(_) | Ty::Applied(_, _)) => ":",
                 _ => ".",
             };
             format!(
                 "{}{}{}({})",
-                emit_expr(base, scopes, function_returns, classes),
+                emit_expr(base, scopes, function_returns, ctx),
                 separator,
                 name,
                 args.iter()
-                    .map(|arg| emit_expr(arg, scopes, function_returns, classes))
+                    .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
         }
+        Expr::SuperMember(name) => format!("super.{name}"),
         Expr::Index(base, index) => format!(
             "{}[{}]",
-            emit_expr(base, scopes, function_returns, classes),
-            emit_expr(index, scopes, function_returns, classes)
+            emit_expr(base, scopes, function_returns, ctx),
+            emit_expr(index, scopes, function_returns, ctx)
         ),
-        Expr::Cast(value, _) => emit_expr(value, scopes, function_returns, classes),
+        Expr::Cast(value, _) => emit_expr(value, scopes, function_returns, ctx),
         Expr::Table(fields) => format!(
             "{{ {} }}",
             fields
                 .iter()
                 .map(|(name, value)| {
-                    let value = emit_expr(value, scopes, function_returns, classes);
+                    let value = emit_expr(value, scopes, function_returns, ctx);
                     match name {
                         Some(name) => format!("{name} = {value}"),
                         None => value,
@@ -695,7 +891,7 @@ fn emit_expr(
                 .iter()
                 .map(|value| match value {
                     ListElement::Value(value) =>
-                        emit_expr(value, scopes, function_returns, classes),
+                        emit_expr(value, scopes, function_returns, ctx),
                     ListElement::Previous =>
                         unreachable!("list preservation needs its old binding"),
                 })
@@ -706,10 +902,253 @@ fn emit_expr(
             "{{ {} }}",
             values
                 .iter()
-                .map(|value| emit_expr(value, scopes, function_returns, classes))
+                .map(|value| emit_expr(value, scopes, function_returns, ctx))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Expr::Lambda(function) => {
+            let params = function
+                .params
+                .iter()
+                .map(|param| param.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut body = String::new();
+            let mut lambda_scopes: Vec<HashMap<String, Ty>> = scopes.to_vec();
+            emit_params(
+                &mut body,
+                &function.params,
+                &lambda_scopes,
+                function_returns,
+                ctx,
+            );
+            let function_scope = function
+                .params
+                .iter()
+                .map(|param| (param.name.clone(), param.ty.clone()))
+                .collect::<HashMap<_, _>>();
+            lambda_scopes.push(function_scope);
+            emit_stmts(
+                &function.body,
+                &mut body,
+                1,
+                &mut lambda_scopes,
+                function_returns,
+                ctx,
+            );
+            format!("function({params})\n{body}end")
+        }
+        Expr::FuncRef(name) => name.clone(),
+        Expr::MethodRef(target) => {
+            let Expr::Member(base, name) = target.as_ref() else {
+                return "nil".to_string();
+            };
+            let receiver = emit_expr(base, scopes, function_returns, ctx);
+            let bound = !matches!(
+                inferred_expr_type(base, scopes, function_returns, ctx),
+                Some(Ty::Class(_))
+            );
+            if bound {
+                format!("function(...) return {receiver}.{name}({receiver}, ...) end")
+            } else {
+                format!("function(...) return {receiver}.{name}(...) end")
+            }
+        }
+        Expr::Coalesce(left, right) => format!(
+            "(function(v, d) if v == nil then return d end return v end)({}, {})",
+            emit_expr(left, scopes, function_returns, ctx),
+            emit_expr(right, scopes, function_returns, ctx)
+        ),
+        Expr::Unwrap(value) => format!(
+            "(function(v) if v == nil then error(\"unwrapped a null value\") end return v end)({})",
+            emit_expr(value, scopes, function_returns, ctx)
+        ),
+        Expr::InstanceOf(value, class_name) => format!(
+            "__tandem_instanceof({}, {})",
+            emit_expr(value, scopes, function_returns, ctx),
+            lua_str(class_name)
+        ),
+        Expr::Match(expression) => emit_match(expression, scopes, function_returns, ctx),
+        Expr::CallValue(callee, args) => format!(
+            "{}({})",
+            emit_expr(callee, scopes, function_returns, ctx),
+            args.iter()
+                .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn getter_class(
+    base: &Expr,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+    ctx: &Ctx,
+    name: &str,
+) -> Option<String> {
+    let class_name = match inferred_expr_type(base, scopes, function_returns, ctx)? {
+        Ty::Struct(class_name) | Ty::Applied(class_name, _) => class_name,
+        _ => return None,
+    };
+    let mut current = class_name.clone();
+    let mut visited = HashSet::new();
+    loop {
+        if !visited.insert(current.clone()) {
+            return None;
+        }
+        let Some(class) = ctx.classes.get(&current) else {
+            return None;
+        };
+        if class.getters.iter().any(|getter| getter == name) {
+            return Some(class_name);
+        }
+        current = class.parents.first()?.clone();
+    }
+}
+
+fn operator_class(
+    base: &Expr,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+    ctx: &Ctx,
+    op: &str,
+) -> Option<String> {
+    let class_name = match inferred_expr_type(base, scopes, function_returns, ctx)? {
+        Ty::Struct(class_name) | Ty::Applied(class_name, _) => class_name,
+        _ => return None,
+    };
+    let method = format!("operator{op}");
+    let mut current = class_name;
+    let mut visited = HashSet::new();
+    loop {
+        if !visited.insert(current.clone()) {
+            return None;
+        }
+        let Some(class) = ctx.classes.get(&current) else {
+            return None;
+        };
+        if class.methods.contains_key(&method) {
+            return Some(current);
+        }
+        current = class.parents.first()?.clone();
+    }
+}
+
+fn setter_class(
+    base: &Expr,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+    ctx: &Ctx,
+    name: &str,
+) -> Option<String> {
+    let class_name = match inferred_expr_type(base, scopes, function_returns, ctx)? {
+        Ty::Struct(class_name) | Ty::Applied(class_name, _) => class_name,
+        _ => return None,
+    };
+    let mut current = class_name.clone();
+    let mut visited = HashSet::new();
+    loop {
+        if !visited.insert(current.clone()) {
+            return None;
+        }
+        let Some(class) = ctx.classes.get(&current) else {
+            return None;
+        };
+        if class.setters.iter().any(|setter| setter == name) {
+            return Some(class_name);
+        }
+        current = class.parents.first()?.clone();
+    }
+}
+
+fn emit_match(
+    expression: &crate::compiler::ast::MatchExpr,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+    ctx: &Ctx,
+) -> String {
+    use crate::compiler::ast::Pattern;
+    let subject = emit_expr(&expression.subject, scopes, function_returns, ctx);
+    let mut body = String::new();
+    let mut wildcard: Option<&crate::compiler::ast::MatchArm> = None;
+    let mut first = true;
+    for arm in &expression.arms {
+        if matches!(arm.pattern, Pattern::Wildcard) {
+            wildcard = Some(arm);
+            continue;
+        }
+        let (condition, bindings) =
+            emit_pattern(&arm.pattern, "v", scopes, function_returns, ctx);
+        body.push_str(if first { "    if " } else { "    elseif " });
+        body.push_str(&condition);
+        body.push_str(" then\n");
+        for (name, value) in &bindings {
+            body.push_str(&format!("        local {name} = {value}\n"));
+        }
+        let value = emit_expr(&arm.body, scopes, function_returns, ctx);
+        body.push_str(&format!("        return {value}\n"));
+        first = false;
+    }
+    match wildcard {
+        Some(arm) => {
+            body.push_str("    else\n");
+            let value = emit_expr(&arm.body, scopes, function_returns, ctx);
+            body.push_str(&format!("        return {value}\n    end\n"));
+        }
+        None => {
+            body.push_str("    else\n        error(\"no match arm matched\")\n    end\n");
+        }
+    }
+    format!("(function(v)\n{body}end)({subject})")
+}
+
+fn emit_pattern(
+    pattern: &crate::compiler::ast::Pattern,
+    subject: &str,
+    scopes: &[HashMap<String, Ty>],
+    function_returns: &HashMap<String, Ty>,
+    ctx: &Ctx,
+) -> (String, Vec<(String, String)>) {
+    use crate::compiler::ast::Pattern;
+    match pattern {
+        Pattern::Wildcard => ("true".to_string(), Vec::new()),
+        Pattern::Literal(expr) => (
+            format!("{subject} == {}", emit_expr(expr, scopes, function_returns, ctx)),
+            Vec::new(),
+        ),
+        Pattern::Binding(name) => ("true".to_string(), vec![(name.clone(), subject.to_string())]),
+        Pattern::Tuple(patterns) => {
+            let mut conditions = Vec::new();
+            let mut bindings = Vec::new();
+            for (index, pattern) in patterns.iter().enumerate() {
+                let element = format!("{subject}[{}]", index + 1);
+                let (condition, inner) =
+                    emit_pattern(pattern, &element, scopes, function_returns, ctx);
+                conditions.push(format!("({condition})"));
+                bindings.extend(inner);
+            }
+            (conditions.join(" and "), bindings)
+        }
+        Pattern::Variant(name, variant, payload) => {
+            if let Some(value) = ctx
+                .enums
+                .get(name)
+                .and_then(|info| info.variants.get(variant).copied())
+            {
+                return (format!("{subject} == {value}"), Vec::new());
+            }
+            let mut bindings = Vec::new();
+            if let Some(payload) = payload {
+                let value = format!("{subject}.__tdm_value");
+                let (_, inner) = emit_pattern(payload, &value, scopes, function_returns, ctx);
+                bindings.extend(inner);
+            }
+            (
+                format!("{subject}.__tdm_variant == {}", lua_str(variant)),
+                bindings,
+            )
+        }
     }
 }
 
@@ -718,7 +1157,7 @@ fn emit_list_replacement(
     expr: &Expr,
     scopes: &[HashMap<String, Ty>],
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) -> Option<String> {
     let Expr::List(values) = expr else {
         return None;
@@ -733,7 +1172,7 @@ fn emit_list_replacement(
         .iter()
         .enumerate()
         .map(|(index, value)| match value {
-            ListElement::Value(value) => emit_expr(value, scopes, function_returns, classes),
+            ListElement::Value(value) => emit_expr(value, scopes, function_returns, ctx),
             ListElement::Previous => format!(
                 "(function(v) if v == nil then error(\"list preservation index {} is out of range\") end return v end)(old[{}])",
                 index + 1,
@@ -759,7 +1198,7 @@ fn emit_stmts(
     indent: usize,
     scopes: &mut Vec<HashMap<String, Ty>>,
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) {
     let pad = "    ".repeat(indent);
     for s in stmts {
@@ -771,10 +1210,10 @@ fn emit_stmts(
                     &decl.value,
                     scopes,
                     function_returns,
-                    classes,
+                    ctx,
                 )
-                .unwrap_or_else(|| emit_expr(&decl.value, scopes, function_returns, classes));
-                let ty = declaration_type(decl, scopes, function_returns, classes);
+                .unwrap_or_else(|| emit_expr(&decl.value, scopes, function_returns, ctx));
+                let ty = declaration_type(decl, scopes, function_returns, ctx);
                 let current_scope = scopes.last_mut().unwrap();
                 if current_scope.contains_key(&decl.name) {
                     out.push_str(&format!("{pad}{} = {value}\n", decl.name));
@@ -784,13 +1223,13 @@ fn emit_stmts(
                 current_scope.insert(decl.name.clone(), ty);
             }
             StmtKind::Assign(n, op, e) => {
-                let target = if is_implicit_field(n, scopes, classes) {
+                let target = if is_implicit_field(n, scopes, ctx) {
                     format!("self.{n}")
                 } else {
                     n.clone()
                 };
-                let value = emit_list_replacement(&target, e, scopes, function_returns, classes)
-                    .unwrap_or_else(|| emit_expr(e, scopes, function_returns, classes));
+                let value = emit_list_replacement(&target, e, scopes, function_returns, ctx)
+                    .unwrap_or_else(|| emit_expr(e, scopes, function_returns, ctx));
                 if op == "=" {
                     out.push_str(&format!("{pad}{target} = {value}\n"));
                     if let Expr::Cast(_, ty) = e {
@@ -802,12 +1241,20 @@ fn emit_stmts(
                 }
             }
             StmtKind::AssignMember(base, name, op, e) => {
+                if setter_class(base, scopes, function_returns, ctx, name).is_some() {
+                    let target = emit_expr(base, scopes, function_returns, ctx);
+                    let value = emit_expr(e, scopes, function_returns, ctx);
+                    out.push_str(&format!(
+                        "{pad}{target}.__tandem_setters.{name}({target}, {value})\n"
+                    ));
+                    continue;
+                }
                 let target = format!(
                     "{}.{}",
-                    emit_expr(base, scopes, function_returns, classes),
+                    emit_expr(base, scopes, function_returns, ctx),
                     name
                 );
-                let value = emit_expr(e, scopes, function_returns, classes);
+                let value = emit_expr(e, scopes, function_returns, ctx);
                 if op == "=" {
                     out.push_str(&format!("{pad}{target} = {value}\n"));
                 } else {
@@ -818,10 +1265,10 @@ fn emit_stmts(
             StmtKind::AssignIndex(base, index, op, e) => {
                 let target = format!(
                     "{}[{}]",
-                    emit_expr(base, scopes, function_returns, classes),
-                    emit_expr(index, scopes, function_returns, classes)
+                    emit_expr(base, scopes, function_returns, ctx),
+                    emit_expr(index, scopes, function_returns, ctx)
                 );
-                let value = emit_expr(e, scopes, function_returns, classes);
+                let value = emit_expr(e, scopes, function_returns, ctx);
                 if op == "=" {
                     out.push_str(&format!("{pad}{target} = {value}\n"));
                 } else {
@@ -831,12 +1278,12 @@ fn emit_stmts(
             }
             StmtKind::Expr(e) => out.push_str(&format!(
                 "{pad}{}\n",
-                emit_expr(e, scopes, function_returns, classes)
+                emit_expr(e, scopes, function_returns, ctx)
             )),
             StmtKind::Block(body) => {
                 out.push_str(&format!("{pad}do\n"));
                 scopes.push(HashMap::new());
-                emit_stmts(body, out, indent + 1, scopes, function_returns, classes);
+                emit_stmts(body, out, indent + 1, scopes, function_returns, ctx);
                 scopes.pop();
                 out.push_str(&format!("{pad}end\n"));
             }
@@ -844,17 +1291,17 @@ fn emit_stmts(
                 let before = scopes.clone();
                 out.push_str(&format!(
                     "{pad}if {} then\n",
-                    emit_expr(c, scopes, function_returns, classes)
+                    emit_expr(c, scopes, function_returns, ctx)
                 ));
                 scopes.push(HashMap::new());
-                emit_stmts(a, out, indent + 1, scopes, function_returns, classes);
+                emit_stmts(a, out, indent + 1, scopes, function_returns, ctx);
                 scopes.pop();
                 let yes_types = scopes.clone();
                 *scopes = before.clone();
                 if !b.is_empty() {
                     out.push_str(&format!("{pad}else\n"));
                     scopes.push(HashMap::new());
-                    emit_stmts(b, out, indent + 1, scopes, function_returns, classes);
+                    emit_stmts(b, out, indent + 1, scopes, function_returns, ctx);
                     scopes.pop();
                 }
                 let no_types = scopes.clone();
@@ -865,10 +1312,10 @@ fn emit_stmts(
                 let before = scopes.clone();
                 out.push_str(&format!(
                     "{pad}while {} do\n",
-                    emit_expr(c, scopes, function_returns, classes)
+                    emit_expr(c, scopes, function_returns, ctx)
                 ));
                 scopes.push(HashMap::new());
-                emit_stmts(b, out, indent + 1, scopes, function_returns, classes);
+                emit_stmts(b, out, indent + 1, scopes, function_returns, ctx);
                 scopes.pop();
                 let after = scopes.clone();
                 merge_types(scopes, &before, &after);
@@ -884,14 +1331,14 @@ fn emit_stmts(
                 let before = scopes.clone();
                 out.push_str(&format!(
                     "{pad}for {variable} = {}, {}, {} do\n",
-                    emit_expr(start, scopes, function_returns, classes),
-                    emit_expr(stop, scopes, function_returns, classes),
-                    emit_expr(step, scopes, function_returns, classes)
+                    emit_expr(start, scopes, function_returns, ctx),
+                    emit_expr(stop, scopes, function_returns, ctx),
+                    emit_expr(step, scopes, function_returns, ctx)
                 ));
                 let mut loop_scope = HashMap::new();
                 loop_scope.insert(variable.clone(), Ty::Int);
                 scopes.push(loop_scope);
-                emit_stmts(body, out, indent + 1, scopes, function_returns, classes);
+                emit_stmts(body, out, indent + 1, scopes, function_returns, ctx);
                 scopes.pop();
                 let after = scopes.clone();
                 merge_types(scopes, &before, &after);
@@ -900,7 +1347,7 @@ fn emit_stmts(
             StmtKind::Return(e) => out.push_str(&format!(
                 "{pad}return{}\n",
                 e.as_ref()
-                    .map(|x| format!(" {}", emit_expr(x, scopes, function_returns, classes)))
+                    .map(|x| format!(" {}", emit_expr(x, scopes, function_returns, ctx)))
                     .unwrap_or_default()
             )),
         }
@@ -913,7 +1360,7 @@ fn emit_params(
     params: &[crate::compiler::ast::Param],
     scopes: &[HashMap<String, Ty>],
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) {
     for param in params {
         if let Some(default) = &param.default {
@@ -921,7 +1368,7 @@ fn emit_params(
                 "    if {} == nil then {} = {} end\n",
                 param.name,
                 param.name,
-                emit_expr(default, scopes, function_returns, classes)
+                emit_expr(default, scopes, function_returns, ctx)
             ));
         }
     }
@@ -962,7 +1409,7 @@ fn emit_fields(
     out: &mut String,
     scopes: &[HashMap<String, Ty>],
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) {
     for field in &class.fields {
         if field.is_static || field.default.is_none() {
@@ -975,7 +1422,7 @@ fn emit_fields(
                 field.default.as_ref().unwrap(),
                 scopes,
                 function_returns,
-                classes
+                ctx
             )
         ));
     }
@@ -987,7 +1434,7 @@ fn emit_class(
     out: &mut String,
     scopes: &mut Vec<HashMap<String, Ty>>,
     function_returns: &HashMap<String, Ty>,
-    classes: &Classes,
+    ctx: &Ctx,
 ) -> () {
     let start = out.len();
     let parents = class
@@ -1022,6 +1469,23 @@ fn emit_class(
     }
     annotate_line(out, start, class.line, class.column);
     out.push_str(&format!("{}.__index = {}\n", class.name, class.name));
+    out.push_str(&format!(
+        "{}.__tandem_class = {}\n",
+        class.name,
+        lua_str(&class.name)
+    ));
+    let ancestors = collect_ancestors(class, program);
+    if !ancestors.is_empty() {
+        let list = ancestors
+            .iter()
+            .map(|name| lua_str(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "{}.__tandem_ancestors = {{ {list} }}\n",
+            class.name
+        ));
+    }
 
     let effective = effective_constructor(program, class);
     let new_params = param_list(effective).join(", ");
@@ -1075,7 +1539,7 @@ fn emit_class(
         out.push_str(&format!("    local super = {parent}\n"));
     }
     if let Some(constructor) = &class.constructor {
-        emit_params(out, &constructor.params, scopes, function_returns, classes);
+        emit_params(out, &constructor.params, scopes, function_returns, ctx);
     }
     if let Some(constructor) = &class.constructor {
         if !parents.is_empty() {
@@ -1086,13 +1550,13 @@ fn emit_class(
                     1,
                     scopes,
                     function_returns,
-                    classes,
+                    ctx,
                 );
             }
             for parent in parents.iter().skip(1) {
                 out.push_str(&format!("    {parent}.__init(self)\n"));
             }
-            emit_fields(class, out, scopes, function_returns, classes);
+            emit_fields(class, out, scopes, function_returns, ctx);
             if constructor.body.len() > 1 {
                 emit_stmts(
                     &constructor.body[1..],
@@ -1100,12 +1564,12 @@ fn emit_class(
                     1,
                     scopes,
                     function_returns,
-                    classes,
+                    ctx,
                 );
             }
         } else {
-            emit_fields(class, out, scopes, function_returns, classes);
-            emit_stmts(&constructor.body, out, 1, scopes, function_returns, classes);
+            emit_fields(class, out, scopes, function_returns, ctx);
+            emit_stmts(&constructor.body, out, 1, scopes, function_returns, ctx);
         }
     } else {
         if !parents.is_empty() {
@@ -1118,12 +1582,15 @@ fn emit_class(
         for parent in parents.iter().skip(1) {
             out.push_str(&format!("    {parent}.__init(self)\n"));
         }
-        emit_fields(class, out, scopes, function_returns, classes);
+        emit_fields(class, out, scopes, function_returns, ctx);
     }
     scopes.pop();
     out.push_str("end\n\n");
 
     for method in &class.methods {
+        if method.is_getter || method.is_setter {
+            continue;
+        }
         let start = out.len();
         let params = method
             .params
@@ -1142,15 +1609,16 @@ fn emit_class(
                 static_scope.insert(param.name.clone(), param.ty.clone());
             }
             scopes.push(static_scope);
-            emit_params(out, &method.params, scopes, function_returns, classes);
-            emit_stmts(&method.body, out, 1, scopes, function_returns, classes);
+            emit_params(out, &method.params, scopes, function_returns, ctx);
+            emit_stmts(&method.body, out, 1, scopes, function_returns, ctx);
             scopes.pop();
             out.push_str("end\n\n");
             continue;
         }
         out.push_str(&format!(
             "function {}:{}({params})\n",
-            class.name, method.name
+            class.name,
+            lua_method_name(&method.name)
         ));
         annotate_line(out, start, method.line, method.column);
         scopes.push(
@@ -1164,8 +1632,8 @@ fn emit_class(
         if let Some(parent) = parents.first() {
             out.push_str(&format!("    local super = {parent}\n"));
         }
-        emit_params(out, &method.params, scopes, function_returns, classes);
-        emit_stmts(&method.body, out, 1, scopes, function_returns, classes);
+        emit_params(out, &method.params, scopes, function_returns, ctx);
+        emit_stmts(&method.body, out, 1, scopes, function_returns, ctx);
         scopes.pop();
         out.push_str("end\n\n");
     }
@@ -1181,10 +1649,90 @@ fn emit_class(
                 field.default.as_ref().unwrap(),
                 scopes,
                 function_returns,
-                classes
+                ctx
             )
         ));
     }
+
+    let getters: Vec<&Fun> = class.methods.iter().filter(|m| m.is_getter).collect();
+    let setters: Vec<&Fun> = class.methods.iter().filter(|m| m.is_setter).collect();
+    if !getters.is_empty() || !setters.is_empty() {
+        out.push_str(&format!("{}.__tandem_getters = {{}}\n", class.name));
+        out.push_str(&format!("{}.__tandem_setters = {{}}\n", class.name));
+        for getter in getters {
+            out.push_str(&format!(
+                "{}.__tandem_getters.{} = function(self)\n",
+                class.name, getter.name
+            ));
+            let mut method_scope = HashMap::new();
+            method_scope.insert("self".to_string(), self_ty.clone());
+            scopes.push(method_scope);
+            emit_stmts(&getter.body, out, 1, scopes, function_returns, ctx);
+            scopes.pop();
+            out.push_str("end\n");
+        }
+        for setter in setters {
+            let params = setter
+                .params
+                .iter()
+                .map(|param| param.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "{}.__tandem_setters.{} = function(self, {params})\n",
+                class.name, setter.name
+            ));
+            let mut method_scope = HashMap::new();
+            method_scope.insert("self".to_string(), self_ty.clone());
+            for param in &setter.params {
+                method_scope.insert(param.name.clone(), param.ty.clone());
+            }
+            scopes.push(method_scope);
+            emit_params(out, &setter.params, scopes, function_returns, ctx);
+            emit_stmts(&setter.body, out, 1, scopes, function_returns, ctx);
+            scopes.pop();
+            out.push_str("end\n");
+        }
+    }
+}
+
+
+fn lua_method_name(name: &str) -> String {
+    if let Some(op) = name.strip_prefix("operator") {
+        if let Some(suffix) = match op {
+            "+" => Some("plus"),
+            "-" => Some("minus"),
+            "*" => Some("mul"),
+            "/" => Some("div"),
+            "%" => Some("mod"),
+            "==" => Some("eq"),
+            "!=" => Some("ne"),
+            "<" => Some("lt"),
+            ">" => Some("gt"),
+            "<=" => Some("le"),
+            ">=" => Some("ge"),
+            ".." => Some("concat"),
+            _ => None,
+        } {
+            return format!("operator_{suffix}");
+        }
+    }
+    name.to_string()
+}
+
+fn collect_ancestors(class: &ClassDef, program: &[Top]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut stack = class.parents.clone();
+    while let Some(parent) = stack.pop() {
+        if names.contains(&parent) {
+            continue;
+        }
+        names.push(parent.clone());
+        if let Some(definition) = find_class(program, &parent) {
+            stack.extend(definition.parents.clone());
+        }
+    }
+    names
 }
 
 fn ordered_classes(program: &[Top]) -> Vec<String> {
@@ -1232,7 +1780,7 @@ fn ordered_classes(program: &[Top]) -> Vec<String> {
 }
 
 pub(crate) fn generate(program: &[Top], modules: &[(String, Vec<Top>)]) -> String {
-    let mut out = String::from("-- Generated by Tandem 0.1.1. Do not edit this file.\n");
+    let mut out = String::from("-- Generated by Tandem 0.1.2. Do not edit this file.\n");
     for (id, module_program) in modules {
         out.push_str(&format!("package.preload[{}] = function()\n", lua_str(id)));
         out.push_str(&emit_program(module_program, true));
@@ -1245,7 +1793,14 @@ pub(crate) fn generate(program: &[Top], modules: &[(String, Vec<Top>)]) -> Strin
 fn emit_program(program: &[Top], module_mode: bool) -> String {
     let mut globals = HashMap::new();
     let mut function_returns = HashMap::new();
-    let classes = collect_classes(program);
+    let class_map = collect_classes(program);
+    let enum_map = collect_enums(program);
+    let union_map = collect_unions(program);
+    let ctx = Ctx {
+        classes: &class_map,
+        enums: &enum_map,
+        unions: &union_map,
+    };
     let mut class_names = Vec::new();
     for top in program {
         if let Top::Class(class) = top {
@@ -1258,7 +1813,8 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
     let mut export_names = Vec::new();
     for top in program {
         match top {
-            Top::Interface(_) => {}
+            Top::Interface(_) | Top::Trait(_) | Top::Mixin(_) => {}
+            Top::Enum(_) | Top::Union(_) => {}
             Top::Fun(function) => {
                 function_returns.insert(function.name.clone(), function.ret.clone());
                 function_names.push(function.name.clone());
@@ -1271,7 +1827,7 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                 ..
             }) => {
                 if !globals.contains_key(&decl.name) {
-                    let ty = declaration_type(decl, &[], &function_returns, &classes);
+                    let ty = declaration_type(decl, &[], &function_returns, &ctx);
                     globals.insert(decl.name.clone(), ty);
                 }
                 if (decl.is_local || module_mode) && !local_globals.contains(&decl.name) {
@@ -1282,7 +1838,12 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                 }
             }
             Top::Stmt(_) => {}
-            Top::Class(class) => class_names.push(class.name.clone()),
+            Top::Class(class) => {
+                class_names.push(class.name.clone());
+                if module_mode && !export_names.contains(&class.name) {
+                    export_names.push(class.name.clone());
+                }
+            }
             Top::Struct(_) => {}
             Top::Import { .. } => {}
         }
@@ -1304,6 +1865,9 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
     }
     if !class_names.is_empty() {
         out.push_str("local __tandem_init_state = setmetatable({}, { __mode = \"k\" })\n\n");
+        out.push_str(
+            "local function __tandem_instanceof(value, name)\n    local mt = getmetatable(value)\n    if not mt then return false end\n    if mt.__tandem_class == name then return true end\n    for _, ancestor in ipairs(mt.__tandem_ancestors or {}) do\n        if ancestor == name then return true end\n    end\n    return false\nend\n\n",
+        );
     }
     for class_name in ordered_classes(program) {
         if let Some(def) = program.iter().find_map(|top| {
@@ -1323,7 +1887,7 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                 &mut out,
                 &mut scopes,
                 &function_returns,
-                &classes,
+                &ctx,
             );
         }
     }
@@ -1355,14 +1919,14 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                     .map(|param| (param.name.clone(), param.ty.clone()))
                     .collect::<HashMap<_, _>>();
                 scopes.push(function_scope);
-                emit_params(&mut out, &f.params, &scopes, &function_returns, &classes);
+                emit_params(&mut out, &f.params, &scopes, &function_returns, &ctx);
                 emit_stmts(
                     &f.body,
                     &mut out,
                     1,
                     &mut scopes,
                     &function_returns,
-                    &classes,
+                    &ctx,
                 );
                 scopes.pop();
                 scopes = outer_scopes;
@@ -1379,9 +1943,9 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                     &decl.value,
                     &scopes,
                     &function_returns,
-                    &classes,
+                    &ctx,
                 )
-                .unwrap_or_else(|| emit_expr(&decl.value, &scopes, &function_returns, &classes));
+                .unwrap_or_else(|| emit_expr(&decl.value, &scopes, &function_returns, &ctx));
                 out.push_str(&format!("{} = {value}\n", decl.name));
                 annotate_line(&mut out, start, *line, *column);
                 if let Expr::Cast(_, ty) = &decl.value {
@@ -1394,11 +1958,15 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                 0,
                 &mut scopes,
                 &function_returns,
-                &classes,
+                &ctx,
             ),
             Top::Class(_) => {}
             Top::Struct(_) => {}
             Top::Interface(_) => {}
+            Top::Trait(_) => {}
+            Top::Enum(_) => {}
+            Top::Union(_) => {}
+            Top::Mixin(_) => {}
             Top::Import { .. } => {}
         }
     }

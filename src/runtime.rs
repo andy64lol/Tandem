@@ -142,10 +142,68 @@ where
         .set("arg", lua_args)
         .map_err(|error| format!("cannot prepare Lua arguments: {error}"))?;
     setup(&lua)?;
-    lua.load(source)
+    let result = lua
+        .load(source)
         .set_name(name)
         .exec()
-        .map_err(|error| format!("Lua runtime error in {name}: {error}"))
+        .map_err(|error| format!("Lua runtime error in {name}: {error}"));
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => Err(map_runtime_error(&error, source, name)),
+    }
+}
+
+fn map_runtime_error(error: &str, source: &str, name: &str) -> String {
+    // Try to map the generated line number back to a source location.
+    let mut mapped = error.to_string();
+    // Find a line number in the error message: "name:LINE: message" or ":LINE:"
+    if let Some(line) = extract_generated_line(error, name) {
+        if let Some((src_line, src_column)) = map_generated_line(source, line) {
+            mapped = format!("{error} (tdm source line {src_line}, column {src_column})");
+        }
+    }
+    mapped
+}
+
+fn extract_generated_line(error: &str, name: &str) -> Option<usize> {
+    // Look for "name:NUMBER:" or ":NUMBER:" patterns.
+    let needle = format!("{name}:");
+    if let Some(pos) = error.find(&needle) {
+        let rest = &error[pos + needle.len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() {
+            return digits.parse().ok();
+        }
+    }
+    // fallback: ":NUMBER:"
+    for part in error.split(':') {
+        let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() && digits.len() == part.len() {
+            return digits.parse().ok();
+        }
+    }
+    None
+}
+
+fn map_generated_line(source: &str, generated_line: usize) -> Option<(usize, usize)> {
+    let lines: Vec<&str> = source.lines().collect();
+    if generated_line == 0 || generated_line > lines.len() {
+        return None;
+    }
+    // Walk backwards from the generated line to find the nearest tdm: comment.
+    for index in (0..generated_line).rev() {
+        let line = lines.get(index)?;
+        if let Some(pos) = line.find("-- tdm:") {
+            let rest = &line[pos + "-- tdm:".len()..];
+            let parts: Vec<&str> = rest.split(':').collect();
+            if parts.len() >= 2 {
+                let src_line: usize = parts[0].trim().parse().ok()?;
+                let src_column: usize = parts[1].trim().parse().ok()?;
+                return Some((src_line, src_column));
+            }
+        }
+    }
+    None
 }
 
 fn configure_package_path(lua: &Lua, package_root: &Path) -> Result<(), String> {

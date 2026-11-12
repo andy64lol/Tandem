@@ -99,6 +99,10 @@ impl WarnChecker {
                 }
                 Top::Struct(_) => {}
                 Top::Interface(_) => {}
+                Top::Trait(_) => {}
+                Top::Enum(_) => {}
+                Top::Union(_) => {}
+                Top::Mixin(_) => {}
                 Top::Import { .. } => {}
             }
         }
@@ -229,6 +233,7 @@ impl WarnChecker {
                 }
             }
             Expr::Call(name, args) => {
+                self.use_var(name);
                 if name == "printf" {
                     if let Some(Expr::Str(format)) = args.first() {
                         if let Ok(parts) = parse_printf_format(format) {
@@ -244,6 +249,30 @@ impl WarnChecker {
                     self.expr(arg);
                 }
             }
+            Expr::CallValue(callee, args) => {
+                self.expr(callee);
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
+            Expr::FuncRef(name) => self.use_var(name),
+            Expr::MethodRef(target) => self.expr(target),
+            Expr::Coalesce(left, right) => {
+                self.expr(left);
+                self.expr(right);
+            }
+            Expr::Unwrap(value) => self.expr(value),
+            Expr::SafeMember(base, _) => self.expr(base),
+            Expr::InstanceOf(value, _) => self.expr(value),
+            Expr::SuperMember(_) => {}
+            Expr::Match(expression) => {
+                self.expr(&expression.subject);
+                for arm in &expression.arms {
+                    self.expr(&arm.body);
+                }
+            }
+            Expr::Null => {}
+            Expr::Lambda(function) => self.function(function),
             Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) => {}
             Expr::Index(base, index) => {
                 self.expr(base);

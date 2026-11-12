@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::compiler::ast::{
-    retyped_global_names, Export, FnSig, ModuleExports, Stmt, StmtKind, Top, Ty,
+    ClassExport, retyped_global_names, Export, FnSig, ModuleExports, Stmt, StmtKind, Top, Ty,
 };
 use crate::compiler::{lexer, parser};
 
@@ -219,6 +219,71 @@ fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
                     )?;
                 }
             }
+            Top::Class(class) => {
+                let required = class
+                    .constructor
+                    .as_ref()
+                    .map(|constructor| {
+                        constructor
+                            .params
+                            .iter()
+                            .take_while(|p| p.default.is_none())
+                            .count()
+                    })
+                    .unwrap_or(0);
+                let constructor = class.constructor.as_ref().map(|constructor| {
+                    FnSig {
+                        args: constructor.params.iter().map(|p| p.ty.clone()).collect(),
+                        required,
+                        ret: Ty::Void,
+                        varargs: false,
+                        generic: constructor.generic.clone(),
+                    }
+                });
+                let mut methods = HashMap::new();
+                let mut static_methods = HashMap::new();
+                for method in &class.methods {
+                    let required = method
+                        .params
+                        .iter()
+                        .take_while(|p| p.default.is_none())
+                        .count();
+                    let method_signature = FnSig {
+                        args: method.params.iter().map(|p| p.ty.clone()).collect(),
+                        required,
+                        ret: method.ret.clone(),
+                        varargs: false,
+                        generic: method.generic.clone(),
+                    };
+                    if method.is_static {
+                        static_methods.insert(method.name.clone(), method_signature);
+                    } else {
+                        methods.insert(method.name.clone(), method_signature);
+                    }
+                }
+                let mut fields = HashMap::new();
+                let mut static_fields = HashMap::new();
+                for field in &class.fields {
+                    if field.is_static {
+                        static_fields.insert(field.name.clone(), field.ty.clone());
+                    } else {
+                        fields.insert(field.name.clone(), field.ty.clone());
+                    }
+                }
+                let class_export = ClassExport {
+                    name: class.name.clone(),
+                    fields: fields.clone(),
+                    constructor: constructor.clone(),
+                    methods: methods.clone(),
+                    static_fields: static_fields.clone(),
+                    static_methods: static_methods.clone(),
+                };
+                insert(
+                    &mut exports,
+                    &class.name,
+                    Export::Class(class_export),
+                )?;
+            }
             _ => {}
         }
     }
@@ -242,6 +307,10 @@ fn collect_requires(program: &[Top], out: &mut Vec<String>) {
             }
             Top::Struct(_) => {}
             Top::Interface(_) => {}
+            Top::Trait(_) => {}
+            Top::Enum(_) => {}
+            Top::Union(_) => {}
+            Top::Mixin(_) => {}
             Top::Import { .. } => {}
         }
     }
@@ -350,7 +419,37 @@ fn collect_expr_requires(expr: &crate::compiler::ast::Expr, out: &mut Vec<String
                 collect_expr_requires(value, out);
             }
         }
-        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Var(_) => {}
+        Expr::CallValue(callee, args) => {
+            collect_expr_requires(callee, out);
+            for arg in args {
+                collect_expr_requires(arg, out);
+            }
+        }
+        Expr::Lambda(function) => {
+            collect_stmt_requires(&function.body, out);
+        }
+        Expr::FuncRef(_) => {}
+        Expr::MethodRef(target) => collect_expr_requires(target, out),
+        Expr::Coalesce(left, right) => {
+            collect_expr_requires(left, out);
+            collect_expr_requires(right, out);
+        }
+        Expr::Unwrap(value) => collect_expr_requires(value, out),
+        Expr::SafeMember(base, _) => collect_expr_requires(base, out),
+        Expr::InstanceOf(value, _) => collect_expr_requires(value, out),
+        Expr::SuperMember(_) => {}
+        Expr::Match(expression) => {
+            collect_expr_requires(&expression.subject, out);
+            for arm in &expression.arms {
+                collect_expr_requires(&arm.body, out);
+            }
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Bool(_)
+        | Expr::Var(_)
+        | Expr::Null => {}
     }
 }
 

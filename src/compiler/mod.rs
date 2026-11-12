@@ -1,6 +1,7 @@
 mod ast;
 mod checker;
 mod codegen;
+pub mod formatter;
 mod lexer;
 mod modules;
 mod parser;

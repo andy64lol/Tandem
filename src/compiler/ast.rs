@@ -38,6 +38,23 @@ pub(crate) enum Ty {
     Generic(String),
     Applied(String, Vec<Ty>),
     TableShape(Box<TableShape>),
+    /// `T?`, a value of type `T` or `null`.
+    Optional(Box<Ty>),
+    /// The type of the `null` literal.
+    Null,
+    /// A first-class function type.
+    Function(Box<FnType>),
+    /// A nominal enum type.
+    Enum(String),
+    /// A nominal discriminated union type.
+    Union(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct FnType {
+    pub(crate) args: Vec<Ty>,
+    pub(crate) required: usize,
+    pub(crate) ret: Ty,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -69,21 +86,63 @@ pub(crate) enum Expr {
     Float(f64),
     Str(String),
     Bool(bool),
+    Null,
     Var(String),
     Unary(String, Box<Expr>),
     Bin(Box<Expr>, String, Box<Expr>),
     Call(String, Vec<Expr>),
+    /// A call whose callee is an arbitrary expression, such as a closure value.
+    CallValue(Box<Expr>, Vec<Expr>),
     New(String, Vec<Expr>),
     NewTyped(String, Vec<Ty>, Vec<Expr>),
     SuperCall(Vec<Expr>),
     SuperMethod(String, Vec<Expr>),
+    /// A read of a static member of the base class, such as `super.counter`.
+    SuperMember(String),
     Member(Box<Expr>, String),
+    /// A member read that yields `null` instead of failing, such as `player?.name`.
+    SafeMember(Box<Expr>, String),
     MethodCall(Box<Expr>, String, Vec<Expr>),
     Index(Box<Expr>, Box<Expr>),
     Cast(Box<Expr>, Ty),
     Table(Vec<(Option<String>, Expr)>),
     List(Vec<ListElement>),
     Tuple(Vec<Expr>),
+    /// An anonymous function value.
+    Lambda(Box<Fun>),
+    /// A reference to a named function, such as `&double`.
+    FuncRef(String),
+    /// A reference to a method, such as `&player.name`.
+    MethodRef(Box<Expr>),
+    /// `left ?? right`, the null-coalescing operator.
+    Coalesce(Box<Expr>, Box<Expr>),
+    /// `value!`, which unwraps an optional value.
+    Unwrap(Box<Expr>),
+    /// `value instanceof ClassName`.
+    InstanceOf(Box<Expr>, String),
+    /// A `match` expression.
+    Match(Box<MatchExpr>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MatchExpr {
+    pub(crate) subject: Expr,
+    pub(crate) arms: Vec<MatchArm>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MatchArm {
+    pub(crate) pattern: Pattern,
+    pub(crate) body: Expr,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum Pattern {
+    Wildcard,
+    Literal(Expr),
+    Binding(String),
+    Tuple(Vec<Pattern>),
+    Variant(String, String, Option<Box<Pattern>>),
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +164,7 @@ pub(crate) struct FnSig {
 pub(crate) enum Export {
     Fn(FnSig),
     Var(Ty),
+    Class(ClassExport),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -121,6 +181,16 @@ pub(crate) struct ModuleExports {
     pub(crate) items: HashMap<String, Export>,
     pub(crate) dynamic: bool,
     pub(crate) members: Option<HashSet<String>>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct ClassExport {
+    pub(crate) name: String,
+    pub(crate) fields: HashMap<String, Ty>,
+    pub(crate) constructor: Option<FnSig>,
+    pub(crate) methods: HashMap<String, FnSig>,
+    pub(crate) static_fields: HashMap<String, Ty>,
+    pub(crate) static_methods: HashMap<String, FnSig>,
 }
 
 pub(crate) fn module_basename(path: &str) -> String {
@@ -238,6 +308,11 @@ pub(crate) struct Fun {
     pub(crate) generic: Vec<String>,
     pub(crate) is_static: bool,
     pub(crate) is_private: bool,
+    pub(crate) is_protected: bool,
+    pub(crate) is_abstract: bool,
+    pub(crate) is_final: bool,
+    pub(crate) is_getter: bool,
+    pub(crate) is_setter: bool,
     pub(crate) body: Vec<Stmt>,
 }
 #[derive(Clone, Debug)]
@@ -263,6 +338,7 @@ pub(crate) struct ClassField {
     pub(crate) column: usize,
     pub(crate) is_static: bool,
     pub(crate) is_private: bool,
+    pub(crate) is_protected: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -270,12 +346,70 @@ pub(crate) struct ClassDef {
     pub(crate) name: String,
     pub(crate) parents: Vec<String>,
     pub(crate) interfaces: Vec<String>,
+    pub(crate) mixins: Vec<String>,
     pub(crate) generic: Vec<String>,
     pub(crate) line: usize,
     pub(crate) column: usize,
     pub(crate) fields: Vec<ClassField>,
     pub(crate) constructor: Option<Fun>,
     pub(crate) methods: Vec<Fun>,
+    pub(crate) is_abstract: bool,
+    pub(crate) is_final: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct EnumVariant {
+    pub(crate) name: String,
+    pub(crate) value: i64,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct EnumDef {
+    pub(crate) name: String,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+    pub(crate) variants: Vec<EnumVariant>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct UnionVariant {
+    pub(crate) name: String,
+    pub(crate) payload: Option<Ty>,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct UnionDef {
+    pub(crate) name: String,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+    pub(crate) variants: Vec<UnionVariant>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MixinDef {
+    pub(crate) name: String,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+    pub(crate) fields: Vec<ClassField>,
+    pub(crate) methods: Vec<Fun>,
+}
+
+/// Runtime information about an enum declaration.
+#[derive(Clone, Debug)]
+pub(crate) struct EnumInfo {
+    /// Variant name to its integer value.
+    pub(crate) variants: HashMap<String, i64>,
+}
+
+/// Runtime information about a discriminated union declaration.
+#[derive(Clone, Debug)]
+pub(crate) struct UnionInfo {
+    /// Variant name to the type of its payload, if it has one.
+    pub(crate) variants: HashMap<String, Option<Ty>>,
 }
 
 pub(crate) fn substitute_type(ty: &Ty, bindings: &HashMap<String, Ty>) -> Ty {
@@ -313,6 +447,16 @@ pub(crate) fn substitute_type(ty: &Ty, bindings: &HashMap<String, Ty>) -> Ty {
                 .collect();
             Ty::TableShape(Box::new(shape))
         }
+        Ty::Optional(inner) => Ty::Optional(Box::new(substitute_type(inner, bindings))),
+        Ty::Function(signature) => Ty::Function(Box::new(FnType {
+            args: signature
+                .args
+                .iter()
+                .map(|ty| substitute_type(ty, bindings))
+                .collect(),
+            required: signature.required,
+            ret: substitute_type(&signature.ret, bindings),
+        })),
         _ => ty.clone(),
     }
 }
@@ -328,7 +472,20 @@ pub(crate) enum Top {
     Stmt(Stmt),
     Struct(StructDef),
     Interface(InterfaceDef),
+    Trait(TraitDef),
     Class(ClassDef),
+    Enum(EnumDef),
+    Union(UnionDef),
+    Mixin(MixinDef),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TraitDef {
+    pub(crate) name: String,
+    pub(crate) parents: Vec<String>,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+    pub(crate) methods: Vec<Fun>,
 }
 
 fn collect_retyped_assignments(
@@ -419,6 +576,10 @@ pub(crate) fn retyped_global_names(program: &[Top]) -> HashSet<String> {
             }
             Top::Struct(_) => {}
             Top::Interface(_) => {}
+            Top::Trait(_) => {}
+            Top::Enum(_) => {}
+            Top::Union(_) => {}
+            Top::Mixin(_) => {}
             Top::Import { .. } => {}
         }
     }

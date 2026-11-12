@@ -4,7 +4,7 @@
 
 Tandem gives you a statically checked language for writing Lua, then carries that code through compilation and execution. It emits readable Lua 5.4, runs Lua inside its own executable, can run existing `.lua` scripts, and installs pure-Lua dependencies declared in a project manifest. The result is a small, self-contained toolchain around Lua—not only a layer of type annotations.
 
-Tandem is an experimental proof of concept (version 0.1.1), and is not production-ready.
+Tandem is an experimental proof of concept (version 0.1.2), and is not production-ready.
 
 ## What you can do
 

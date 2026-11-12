@@ -1,6 +1,6 @@
 [package]
 name = "tandem"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Tandem: a small strictly typed, C-style language that transpiles to Lua 5.4"
 license = "MIT"
@@ -8,3 +8,5 @@ license = "MIT"
 [dependencies]
 mlua = { version = "0.12", features = ["lua54", "vendored"] }
 mlua-pkg = "0.11.0"
+serde = "1.0"
+serde_json = "1.0"

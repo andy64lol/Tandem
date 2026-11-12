@@ -16,34 +16,34 @@
 - [x] Support multiple class and interface bases with `super(...)`, `super.method(...)`, overrides, and inherited constructors.
 - [x] Allow subclass instances where a parent class type is expected, with dynamic method dispatch.
 - [x] Add static fields and static methods.
-- [ ] Add property getters and setters.
+- [x] Add property getters and setters.
 - [x] Add private fields and private methods with `private` visibility.
-- [ ] Add `instanceof` and runtime class checks.
-- [ ] Add class expressions and anonymous classes.
-- [ ] Add computed method names and `super` property access.
-- [ ] Add mixins and traits for sharing behavior without multiple inheritance.
-- [ ] Add abstract, final, and protected classes/members.
-- [ ] Infer class fields from constructor assignments when no initializer is written.
-- [ ] Export class definitions from compiled `.tdm` modules.
+- [x] Add `instanceof` and runtime class checks.
+- [x] Add class expressions and anonymous classes.
+- [x] Add computed method names and `super` property access.
+- [x] Add mixins and traits for sharing behavior without multiple inheritance.
+- [x] Add abstract, final, and protected classes/members.
+- [x] Infer class fields from constructor assignments when no initializer is written.
+- [x] Export class definitions from compiled `.tdm` modules.
 - [x] Add interfaces and protocol conformance checks.
-- [ ] Support method references and first-class methods.
+- [x] Support method references and first-class methods.
 
 ### Types and language
 
 - [x] Add generics for classes and functions; collection type constructors can contain generic parameters.
-- [ ] Add closures and first-class functions.
-- [ ] Add optional types and null safety.
-- [ ] Add enums and discriminated unions.
-- [ ] Add user-defined operator overloads.
-- [ ] Add pattern matching and destructuring.
+- [x] Add closures and first-class functions.
+- [x] Add optional types and null safety.
+- [x] Add enums and discriminated unions.
+- [x] Add user-defined operator overloads.
+- [x] Add pattern matching and destructuring.
 
 ## Compiler and tooling
 
-- [ ] Add a source formatter for `.tdm` files.
-- [ ] Add a language server with completion and diagnostics.
-- [ ] Add an interactive REPL.
-- [ ] Emit byte-accurate debug information for Lua tracebacks.
-- [ ] Expand static signatures to the remaining Lua standard-library members.
+- [x] Add a source formatter for `.tdm` files.
+- [x] Add a language server with completion and diagnostics.
+- [x] Add an interactive REPL.
+- [x] Emit byte-accurate debug information for Lua tracebacks.
+- [x] Expand static signatures to the remaining Lua standard-library members.
 - [x] Report source locations with line and column numbers, and include them in type errors.
 - [x] Add parser error recovery so one compile can report more than the first syntax error.
 - [x] Add source maps from generated Lua back to the `.tdm` source.
