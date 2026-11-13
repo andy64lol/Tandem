@@ -58,6 +58,39 @@ pub(crate) fn install_resolver(lua: &Lua, root: &Path) -> Result<(), String> {
         .map_err(|error| format!("cannot configure Lua package resolver: {error}"))
 }
 
+/// Adds a git-backed dependency to `tandem.config` and installs it.
+///
+/// A bare package name is resolved against the registry base URL from
+/// `TANDEM_REGISTRY` (default `https://github.com`), matching the
+/// `https://<base>/<name>/<name>.git` convention.
+pub fn add(
+    root: impl AsRef<Path>,
+    name: &str,
+    git: Option<&str>,
+    tag: Option<&str>,
+) -> Result<(), String> {
+    let root = root.as_ref();
+    let (manifest, lock) = manifest_names(root);
+    let project = Project::new(
+        root.join(&manifest),
+        root.join(&lock),
+        PkgDir::default_in(root),
+    );
+    let config = Config::new(project);
+    let registry = std::env::var("TANDEM_REGISTRY")
+        .unwrap_or_else(|_| "https://github.com".to_string());
+    let derived = git
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}/{name}/{name}.git", registry.trim_end_matches('/')));
+    let mut spec = ops::AddSpec::new(name, derived);
+    spec.tag = tag.map(str::to_string);
+    ops::add(&config, spec)
+        .map_err(|error| format!("cannot add package '{name}': {error}"))?;
+    ops::install(&config)
+        .map(|_| ())
+        .map_err(|error| format!("cannot install package '{name}': {error}"))
+}
+
 /// The manifest filename Tandem prefers.
 pub fn manifest_name() -> &'static str {
     TANDEM_MANIFEST

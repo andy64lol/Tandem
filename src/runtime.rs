@@ -1,11 +1,16 @@
 use std::{
+    collections::HashMap,
     fs,
     path::Path,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    thread,
+    time::Duration,
 };
+
+use std::sync::Mutex;
 
 use mlua::{HookTriggers, Lua, VmState};
 
@@ -13,6 +18,8 @@ use mlua::{HookTriggers, Lua, VmState};
 pub struct RuntimeConfig {
     pub memory_limit: Option<usize>,
     pub instruction_limit: Option<u64>,
+    /// Restricts the standard library to a small, side-effect-free subset.
+    pub sandbox: bool,
 }
 
 pub fn run_file(path: impl AsRef<Path>) -> Result<(), String> {
@@ -60,6 +67,34 @@ pub fn run_file_with_config_in(
         .map_err(|error| format!("cannot read Lua file {}: {error}", path.display()))?;
     let name = path.to_string_lossy();
     run_source_with_config(&source, &name, args, package_root.as_ref(), config)
+}
+
+/// Runs a Lua file and re-runs it whenever the file changes on disk.
+///
+/// This is the runtime primitive behind `tandem run --watch`/`--hot-reload`
+/// for ordinary `.lua` files: the file is executed, then polled for
+/// modification; on change it is executed again.  Errors during a run are
+/// reported to stderr and do not stop watching.
+pub fn run_file_with_hot_reload(
+    path: impl AsRef<Path>,
+    args: &[String],
+    config: &RuntimeConfig,
+) -> Result<(), String> {
+    let path = path.as_ref();
+    let mut last_modified = fs::metadata(path).ok().and_then(|metadata| metadata.modified().ok());
+    loop {
+        if let Err(error) = run_file_with_config(path, args, config) {
+            eprintln!("error: {error}");
+        }
+        loop {
+            thread::sleep(Duration::from_millis(400));
+            let current = fs::metadata(path).ok().and_then(|metadata| metadata.modified().ok());
+            if current != last_modified {
+                last_modified = current;
+                break;
+            }
+        }
+    }
 }
 
 pub fn run_source(source: &str, name: &str) -> Result<(), String> {
@@ -127,6 +162,9 @@ where
     }
     configure_package_path(&lua, package_root)?;
     crate::packages::install_resolver(&lua, package_root)?;
+    if config.sandbox {
+        apply_sandbox(&lua)?;
+    }
     let lua_args = lua
         .create_table()
         .map_err(|error| format!("cannot prepare Lua arguments: {error}"))?;
@@ -151,6 +189,163 @@ where
         Ok(()) => Ok(()),
         Err(error) => Err(map_runtime_error(&error, source, name)),
     }
+}
+
+/// Line execution counts collected while running an instrumented program.
+#[derive(Clone, Debug, Default)]
+pub struct Instrumentation {
+    /// TDM source line -> number of times it ran.
+    pub executed: HashMap<usize, usize>,
+}
+
+/// Every TDM source line that appears in at least one generated Lua line.
+pub fn executable_lines(source: &str) -> Vec<usize> {
+    let mut lines = line_map(source)
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    lines.sort_unstable();
+    lines.dedup();
+    lines
+}
+
+/// Maps generated Lua line numbers (1-based) to their `.tdm` source line.
+///
+/// The code generator ends each emitted statement with a `-- tdm:L:C`
+/// comment.  Lines without their own marker inherit the closest preceding
+/// marker, which covers continuations of multi-line statements.
+pub fn line_map(source: &str) -> Vec<Option<usize>> {
+    let mut map = Vec::new();
+    let mut current = None;
+    for line in source.lines() {
+        if let Some(index) = line.find("-- tdm:") {
+            let rest = &line[index + "-- tdm:".len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(value) = digits.parse::<usize>() {
+                if value > 0 {
+                    current = Some(value);
+                }
+            }
+        }
+        map.push(current);
+    }
+    map
+}
+
+/// Runs Lua and records which `.tdm` lines execute.
+pub fn run_source_with_instrumentation(
+    source: &str,
+    name: &str,
+    args: &[String],
+    package_root: &Path,
+    config: &RuntimeConfig,
+) -> Result<Instrumentation, String> {
+    let mapping = Arc::new(line_map(source));
+    let collected = Arc::new(Mutex::new(HashMap::new()));
+    let sink = Arc::clone(&collected);
+    run_source_with_setup(source, name, args, package_root, config, move |lua| {
+        lua.set_hook(
+            HookTriggers::new().every_line(),
+            move |_, debug| {
+                if let Some(line) = debug.current_line() {
+                    if let Some(Some(tdm)) = mapping.get(line.saturating_sub(1)) {
+                        *sink.lock().unwrap().entry(*tdm).or_insert(0) += 1;
+                    }
+                }
+                Ok(VmState::Continue)
+            },
+        )
+        .map_err(|error| format!("cannot set coverage hook: {error}"))
+    })?;
+    let executed = collected.lock().unwrap().clone();
+    Ok(Instrumentation { executed })
+}
+
+/// Time spent on each `.tdm` line during a profiled run.
+#[derive(Clone, Debug, Default)]
+pub struct Profile {
+    /// TDM source line -> nanoseconds attributed to it.
+    pub time_ns: HashMap<usize, u128>,
+    /// TDM source line -> number of samples attributed to it.
+    pub samples: HashMap<usize, usize>,
+    /// Total wall-clock nanoseconds observed by the profiler.
+    pub total_ns: u128,
+}
+
+/// Runs Lua under a per-line sampling profiler.
+pub fn run_source_with_profile(
+    source: &str,
+    name: &str,
+    args: &[String],
+    package_root: &Path,
+    config: &RuntimeConfig,
+) -> Result<Profile, String> {
+    let mapping = Arc::new(line_map(source));
+    let hook_mapping = Arc::clone(&mapping);
+    let state = Arc::new(Mutex::new(ProfileState::default()));
+    let sink = Arc::clone(&state);
+    run_source_with_setup(source, name, args, package_root, config, move |lua| {
+        lua.set_hook(
+            HookTriggers::new().every_line(),
+            move |_, debug| {
+                let mut state = sink.lock().unwrap();
+                let now = std::time::Instant::now();
+                if let (Some(previous), Some(line)) = (state.previous, state.previous_line) {
+                    state.total_ns += previous.elapsed().as_nanos();
+                    if let Some(Some(tdm)) = hook_mapping.get(line.saturating_sub(1)) {
+                        *state.profile.time_ns.entry(*tdm).or_insert(0) +=
+                            previous.elapsed().as_nanos();
+                        *state.profile.samples.entry(*tdm).or_insert(0) += 1;
+                    }
+                }
+                state.previous = Some(now);
+                state.previous_line = debug.current_line();
+                Ok(VmState::Continue)
+            },
+        )
+        .map_err(|error| format!("cannot set profile hook: {error}"))
+    })?;
+    let mut state = state.lock().unwrap();
+    if let (Some(previous), Some(line)) = (state.previous, state.previous_line) {
+        state.total_ns += previous.elapsed().as_nanos();
+        if let Some(Some(tdm)) = mapping.get(line.saturating_sub(1)) {
+            *state.profile.time_ns.entry(*tdm).or_insert(0) += previous.elapsed().as_nanos();
+            *state.profile.samples.entry(*tdm).or_insert(0) += 1;
+        }
+    }
+    state.profile.total_ns = state.total_ns;
+    Ok(state.profile.clone())
+}
+
+#[derive(Default)]
+struct ProfileState {
+    profile: Profile,
+    previous: Option<std::time::Instant>,
+    previous_line: Option<usize>,
+    total_ns: u128,
+}
+
+/// Removes process, filesystem and debug access from the Lua standard library.
+fn apply_sandbox(lua: &Lua) -> Result<(), String> {
+    let globals = lua.globals();
+    for name in [
+        "io",
+        "os",
+        "debug",
+        "package",
+        "require",
+        "dofile",
+        "loadfile",
+        "load",
+        "loadstring",
+        "collectgarbage",
+        "newproxy",
+    ] {
+        globals
+            .set(name, mlua::Value::Nil)
+            .map_err(|error| format!("cannot configure sandbox: {error}"))?;
+    }
+    Ok(())
 }
 
 fn map_runtime_error(error: &str, source: &str, name: &str) -> String {
@@ -271,6 +466,31 @@ mod tests {
         let name = dir.join("main.lua");
         run_source_with_args(source, &name.to_string_lossy(), &[], dir).unwrap();
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sandbox_removes_unsafe_globals() {
+        let config = RuntimeConfig {
+            sandbox: true,
+            ..RuntimeConfig::default()
+        };
+        let error = run_source_with_config(
+            "os.execute('true')",
+            "sandbox.lua",
+            &[],
+            Path::new("."),
+            &config,
+        )
+        .unwrap_err();
+        assert!(error.to_lowercase().contains("os"), "{error}");
+        run_source_with_config(
+            "assert(print ~= nil and string.upper('a') == 'A')",
+            "sandbox-ok.lua",
+            &[],
+            Path::new("."),
+            &config,
+        )
+        .unwrap();
     }
 
     #[test]

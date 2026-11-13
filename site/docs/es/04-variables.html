@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>4. Variables - Tandem</title>
+    <link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="../index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="../01-introduction.html">01-introduction</a></li>
+<li><a href="../02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="../03-types.html">03-types</a></li>
+<li><a href="../04-variables.html">04-variables</a></li>
+<li><a href="../05-functions.html">05-functions</a></li>
+<li><a href="../06-statements.html">06-statements</a></li>
+<li><a href="../07-expressions.html">07-expressions</a></li>
+<li><a href="../08-comments.html">08-comments</a></li>
+<li><a href="../12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="../09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="../10-cli.html">10-cli</a></li>
+<li><a href="../11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="../13-limitations.html">13-limitations</a></li>
+</ul>
+<h3 class="sidebar-group-title">Español</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html" class="active">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../../index.html">Home</a>
+            <a href="../../docs/stdlib/index.html">Standard Library</a>
+            <span>4. Variables</span>
+        </div>
+        <div class="search-bar" data-search-index="../../search-index.json" data-site-root="../../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="4-variables">4. Variables</h1>
+<h2 id="declaraciones">Declaraciones</h2>
+<p>Las declaraciones usan <code>(local) (const) type name = value;</code>, donde los paréntesis marcan modificadores opcionales. Por ejemplo:</p>
+<pre><code>int score = 0;
+float gravity = 9.8;
+bool alive = true;
+str playerName = &quot;Ada&quot;;
+const int maxLives = 3;
+local int scoreLimit = 100;
+(local) (const) str edition = &quot;standard&quot;;
+list int scores = [10, 20, 30];
+tuple position = (0, 10, 11);</code></pre>
+<p>Toda declaración necesita un inicializador, y el inicializador debe tener el tipo declarado. Las reasignaciones se comprueban contra el tipo actual de la variable. Para cambiar deliberadamente ese tipo, anota el nuevo valor con <code>as type</code>:</p>
+<pre><code>int name = 0;
+name = &quot;Hello!&quot; as str;
+name = &quot;Tandem&quot;; // ahora es un str
+// name = 1;      // error: name ahora es un str</code></pre>
+<p>Las instancias de clase usan la forma especial de declaración <code>class</code>: <code>class Player = new player;</code>, opcionalmente con <code>local</code> o <code>const</code>. La clase de la expresión <code>new</code> proporciona el tipo estático. Consulta <a href="12-classes.html">Clases</a>.</p>
+<p>La única excepción a la regla de tipos es un enlace de módulo: <code>module greetings = require(&quot;greetings.tdm&quot;);</code> y <code>local greetings = require(&quot;greetings.tdm&quot;);</code> infieren el tipo de módulo a partir de <code>require</code>. Consulta <a href="02-getting-started.html#dividir-un-programa-en-varios-archivos">Primeros pasos</a> para las importaciones de módulos.</p>
+<h3 id="inferencia-automtica-de-tipos">Inferencia automática de tipos</h3>
+<p>El tipo <code>auto</code> infiere el tipo de una variable a partir de su inicializador y luego lo bloquea, de modo que las asignaciones posteriores se comportan como si el tipo inferido se hubiera escrito explícitamente:</p>
+<pre><code>auto lives = 3;        // inferido como int
+lives += 1;
+// lives = &quot;three&quot; as str; // error: no se puede cambiar el tipo de la variable &#x27;auto&#x27; &#x27;lives&#x27;
+
+auto greeting = &quot;hi &quot; .. &quot;there&quot;; // inferido como str</code></pre>
+<p>Una variable <code>auto</code> no puede redefinirse y el inicializador debe tener un tipo estático. El tipo no puede inferirse de un valor dinámico como un miembro de un paquete de la biblioteca estándar, y usar <code>auto</code> en un parámetro, campo o tipo de retorno es un error; solo es válido en una declaración de variable con inicializador.</p>
+<p><code>as</code> es una aserción de tipo, no una conversión: un valor estáticamente conocido ya debe tener el tipo asertado. Para un valor dinámico leído de una <code>table</code> o <code>dict</code> genérica, de una tupla con índice desconocido o de un módulo dinámico, <code>as type</code> aserta explícitamente su tipo. El Lua generado no valida ni convierte el valor en tiempo de ejecución. Si distintas rutas de control dejan una variable con tipos diferentes, el compilador trata su tipo como dinámico hasta que se use una aserción explícita <code>as type</code>. Una variable global puede re-tiparse en el nivel superior; dentro de una función, usa <code>as</code> para leer una global cuyo tipo cambia en el programa, y re-tipar la global misma se rechaza.</p>
+<p>Una variable no puede declararse con tipo <code>void</code>.</p>
+<h3 id="redefinicin-de-colecciones">Redefinición de colecciones</h3>
+<p>Las declaraciones de <code>list</code>, <code>dict</code> y <code>tuple</code> pueden repetir un nombre de colección existente en el mismo alcance para reemplazar su valor. Las listas conservan su tipo de elemento declarado. Las tuplas conservan la longitud y el tipo en cada posición inferidos por la primera declaración. Los diccionarios conservan el tipo <code>dict</code> y pueden contener campos nombrados con distintos tipos de valor. Estas redefiniciones solo se permiten para variables mutables. No se puede hacer <code>const</code> una variable mutable mediante una declaración posterior.</p>
+<pre><code>tuple position = (0, 10, 11);
+tuple position = (10, 20, 30); // válido
+// tuple position = (&quot;Hello&quot;, 10); // error: longitud y tipo del primer elemento incorrectos
+
+list int scores = [10, 20, 30];
+scores = [..., 12, ...];</code></pre>
+<h2 id="los-modificadores-local-y-const">Los modificadores local y const</h2>
+<p>Los modificadores <code>local</code> y <code>const</code> son opcionales, mostrados aquí como <code>(local)</code> y <code>(const)</code>. Pueden aparecer en cualquier orden y escribirse con o sin paréntesis. Así, <code>local const int limit = 10;</code>, <code>(local) (const) int limit = 10;</code> y <code>const (local) int limit = 10;</code> son formas aceptadas. Escribir el mismo modificador dos veces es un error.</p>
+<h3 id="local">local</h3>
+<p>Dentro de funciones y bloques, las declaraciones se convierten en locales de Lua tanto si se escribe <code>local</code> como si no. En el nivel superior, las declaraciones se convierten en globales de Lua a menos que se marquen como <code>local</code>; los locales de nivel superior son visibles para las funciones del mismo archivo Tandem. En el Lua generado, los nombres <code>local</code> de nivel superior se elevan a la parte superior del chunk.</p>
+<h3 id="const">const</h3>
+<p>Un enlace <code>const</code> puede leerse como cualquier otra variable, pero Tandem rechaza las asignaciones a él, incluidas las compuestas:</p>
+<pre><code>const int maxLives = 3;
+maxLives = 4;    // error: no se puede asignar a la constante &#x27;maxLives&#x27;
+maxLives += 1;   // error</code></pre>
+<p>Su inicializador debe coincidir con su tipo declarado. La constancia se comprueba por el compilador de Tandem y se borra en el Lua generado. Un <code>const tuple</code> también bloquea sus elementos. Declarar una colección ya mutable con <code>const</code> es un error.</p>
+<h2 id="alcance">Alcance</h2>
+<p>Una declaración es visible desde su sentencia hasta el final del bloque que la contiene. Se rechazan nombres duplicados en el mismo alcance, excepto las redefiniciones de colección descritas arriba. Un bloque interno puede ocultar un nombre de un alcance exterior. Las llaves crean alcances: cuerpos de funciones, cuerpos de <code>if</code> y <code>while</code>, cuerpos de <code>for</code> y bloques independientes (consulta <a href="06-statements.html">Sentencias</a>).</p>
+<pre><code>{
+    int temporary = 1;
+    print(temporary);
+}
+// &#x27;temporary&#x27; es desconocido aquí</code></pre>
+<p>Los parámetros de función ocupan el alcance de la función y pueden asignarse como cualquier otra variable mutable.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../../search.js" defer></script>
+</body>
+</html>

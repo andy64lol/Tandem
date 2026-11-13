@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>10. Línea de comandos - Tandem</title>
+    <link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="../index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="../01-introduction.html">01-introduction</a></li>
+<li><a href="../02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="../03-types.html">03-types</a></li>
+<li><a href="../04-variables.html">04-variables</a></li>
+<li><a href="../05-functions.html">05-functions</a></li>
+<li><a href="../06-statements.html">06-statements</a></li>
+<li><a href="../07-expressions.html">07-expressions</a></li>
+<li><a href="../08-comments.html">08-comments</a></li>
+<li><a href="../12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="../09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="../10-cli.html">10-cli</a></li>
+<li><a href="../11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="../13-limitations.html">13-limitations</a></li>
+</ul>
+<h3 class="sidebar-group-title">Español</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html" class="active">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../../index.html">Home</a>
+            <a href="../../docs/stdlib/index.html">Standard Library</a>
+            <span>10. Línea de comandos</span>
+        </div>
+        <div class="search-bar" data-search-index="../../search-index.json" data-site-root="../../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="10-lnea-de-comandos">10. Línea de comandos</h1>
+<h2 id="paquetes-luarocks">Paquetes LuaRocks</h2>
+<p>Tandem usa <code>mlua-pkg</code> para instalar paquetes LuaRocks puros desde sus repositorios Git. Añade un manifiesto al directorio del proyecto:</p>
+<pre><code>[package]
+name = &quot;my-project&quot;
+version = &quot;0.1.0&quot;
+
+[deps]
+penlight = { git = &quot;https://github.com/lunarmodules/Penlight&quot;, tag = &quot;1.14.0&quot; }</code></pre>
+<p>Luego ejecuta:</p>
+<pre><code>tandem pkg install</code></pre>
+<p>En tiempo de ejecución, Tandem carga los módulos instalados desde <code>mlua-pkg.lock</code>. Por ejemplo, <code>require(&quot;pl.path&quot;)</code> resuelve el módulo path de Penlight. Las dependencias de paquetes se fijan en el lockfile. <code>mlua-pkg</code> lee rockspecs de los repositorios Git; no busca paquetes por nombre en luarocks.org y los módulos C no se compilan como parte de la instalación.</p>
+<h2 id="sinopsis">Sinopsis</h2>
+<pre><code>tandem [--memory-limit &lt;bytes&gt;] [--instruction-limit &lt;count&gt;] [--sandbox] [--target &lt;lua5.1|lua5.2|lua5.3|lua5.4&gt;] &lt;input.tdm|script.lua&gt; [output.lua o argumentos del script...]
+tandem [opciones] --check &lt;input.tdm&gt;
+tandem --version
+tandem fmt &lt;input.tdm&gt;
+tandem repl
+tandem lsp
+tandem dap
+tandem new &lt;name&gt;
+tandem build
+tandem run [--watch] [argumentos del script...]
+tandem test [input.tdm]
+tandem coverage [input.tdm]
+tandem profile [input.tdm]
+tandem add &lt;name&gt; [git-url] [--tag &lt;tag&gt;]
+tandem pkg install [project-dir]</code></pre>
+<p>Los flags de límite se aplican a la ejecución de Lua embebido, incluido el paso de ejecución después de compilar un archivo <code>.tdm</code>.</p>
+<h2 id="compilar-y-ejecutar-cdigo-fuente-tandem">Compilar y ejecutar código fuente Tandem</h2>
+<p>Los archivos fuente de Tandem usan la extensión <code>.tdm</code>. La compilación escribe un archivo <code>.lua</code> junto al fuente y luego lo ejecuta:</p>
+<pre><code>tandem examples/hello.tdm
+#    Compiling examples/hello.tdm
+#     Finished examples/hello.lua
+Hello, world!</code></pre>
+<p>Elige otra ruta de salida pasándola como segundo argumento:</p>
+<pre><code>tandem examples/hello.tdm build/hello.lua</code></pre>
+<p>El directorio de salida ya debe existir. Antes de compilar, Tandem comprueba la ruta objetivo: un archivo <code>.lua</code> existente se sobrescribe solo cuando empieza con la cabecera generada (<code>-- Generated by Tandem ...</code>). Si el archivo no fue generado por Tandem, el comando falla en lugar de reemplazarlo.</p>
+<p>Al desarrollar en este repositorio, usa Cargo para ejecutar la CLI:</p>
+<pre><code>cargo run -- examples/hello.tdm
+cargo run -- examples/hello.tdm examples/hello-custom.lua</code></pre>
+<p><code>require</code> sigue el grafo de módulos. Las rutas usan <code>/</code> y pueden incluir una extensión explícita <code>.tdm</code> o <code>.lua</code>. Sin extensión, Tandem intenta <code>&lt;path&gt;.tdm</code>, <code>&lt;path&gt;.lua</code>, <code>&lt;path&gt;/init.tdm</code> y <code>&lt;path&gt;/init.lua</code> relativos al directorio del archivo de entrada. Los nombres punteados estilo Lua como <code>lib.math</code> también resuelven a <code>lib/math.tdm</code> y a los otros candidatos. Cada archivo <code>.tdm</code> alcanzado desde la entrada se compila e incrusta en el Lua generado bajo <code>package.preload</code>. Los archivos <code>.lua</code> importados no se compilan ni copian; Lua los carga en tiempo de ejecución desde el directorio del archivo de entrada. <code>--check</code> analiza y comprueba el mismo conjunto de archivos.</p>
+<h2 id="comprobar-sin-ejecutar">Comprobar sin ejecutar</h2>
+<p><code>--check</code> analiza y comprueba los tipos del archivo. No escribe ni ejecuta el Lua generado y, en caso de éxito, imprime la ruta comprobada:</p>
+<pre><code>tandem --check examples/hello.tdm
+#     Checking examples/hello.tdm
+#     Finished examples/hello.tdm
+cargo run -- --check examples/hello.tdm</code></pre>
+<h2 id="ejecutar-archivos-lua-ordinarios">Ejecutar archivos Lua ordinarios</h2>
+<p>Pasa un archivo <code>.lua</code> para ejecutarlo directamente en el runtime Lua 5.4 embebido. Los argumentos adicionales están disponibles para el script a través de la tabla <code>arg</code> de Lua (<code>arg[0]</code> es la ruta y los argumentos del script empiezan en <code>arg[1]</code>):</p>
+<pre><code>tandem examples/script.lua first-arg second-arg
+cargo run -- examples/script.lua first-arg second-arg</code></pre>
+<p>El archivo <code>.lua</code> se ejecuta tal cual; no se analiza como Tandem ni se transpila.</p>
+<h2 id="lmites-de-runtime">Límites de runtime</h2>
+<p>Dos flags acotan la ejecución de código Lua. Pueden aparecer antes de la ruta de entrada:</p>
+<pre><code>tandem --instruction-limit 1000000 script.lua
+tandem --memory-limit 67108864 script.lua
+tandem --sandbox script.lua</code></pre>
+<ul>
+<li><code>--instruction-limit &lt;count&gt;</code> aborta la ejecución después de aproximadamente el número dado de instrucciones de la VM de Lua. Es una protección contra bucles infinitos, no un límite de tiempo preciso; el runtime comprueba en lotes de como máximo 10,000 instrucciones.</li>
+<li><code>--memory-limit &lt;bytes&gt;</code> establece el límite del asignador de Lua. La asignación más allá de este límite falla con un error de memoria de Lua.</li>
+<li><code>--sandbox</code> restringe la biblioteca estándar a un subconjunto pequeño y sin efectos secundarios, eliminando <code>io</code>, <code>os</code>, <code>debug</code>, <code>package</code>, <code>require</code> y funciones relacionadas.</li>
+</ul>
+<p>Ambos fallos se reportan como errores de runtime de Lua después de que cualquier archivo de salida de Tandem se haya escrito, y el comando sale con estado 1.</p>
+<h2 id="diagnsticos">Diagnósticos</h2>
+<p>Los errores de fuente y de runtime de Lua se imprimen en el error estándar y el comando sale con un estado distinto de cero:</p>
+<ul>
+<li>Un diagnóstico de Tandem (error o advertencia) se imprime como <code>error: ...</code> o <code>warning: ...</code>, seguido de una línea <code> --&gt; path:line:column</code> cuando se conoce la ubicación. Como las advertencias son fatales, cualquiera de las dos formas impide la generación de salida y sale con estado 1. Consulta <a href="09-diagnostics.html">Diagnósticos</a>.</li>
+<li>Un error de runtime de Lua ocurre después de que el archivo de salida se haya escrito, por lo que el archivo generado sigue disponible para inspección. El comando sale con estado 1.</li>
+<li>Una línea de comandos inválida imprime el mensaje de uso y sale con estado 2.</li>
+</ul>
+<p>Las etiquetas de estado y los diagnósticos usan colores ANSI cuando el flujo correspondiente es una terminal; la salida redirigida permanece en texto plano.</p>
+<p>El Lua generado también contiene comentarios <code>-- tdm:&lt;line&gt;:&lt;column&gt;</code> que mapean sentencias de vuelta al código fuente de Tandem; consulta <a href="09-diagnostics.html#mapas-de-fuente">Diagnósticos</a>.</p>
+<p>En caso de éxito el comando sale con estado 0.</p>
+<h2 id="proyectos">Proyectos</h2>
+<p><code>tandem new &lt;name&gt;</code> crea un nuevo directorio de proyecto con <code>tandem.config</code>, <code>src/main.tdm</code> y una plantilla de programa.</p>
+<p><code>tandem build</code> compila el punto de entrada del proyecto (<code>src/main.tdm</code> o <code>src/lib.tdm</code>) en <code>target/debug/&lt;name&gt;.lua</code>. Usa <code>--target lua5.1|lua5.2|lua5.3|lua5.4</code> para generar Lua para otro intérprete; la salida se escribe en <code>target/&lt;target&gt;/debug/</code>. Las compilaciones incrementales reutilizan el resultado cuando las fuentes no han cambiado.</p>
+<p><code>tandem run</code> compila y ejecuta. Añade <code>--watch</code> para recompilar y re-ejecutar automáticamente cuando cambien los archivos <code>.tdm</code>. Los argumentos adicionales se pasan al programa a través de la tabla <code>arg</code>.</p>
+<p><code>tandem test [input.tdm]</code> compila y ejecuta los bloques <code>test &quot;name&quot; { ... }</code> embebidos, imprimiendo el resultado de cada uno y saliendo con estado distinto de cero si alguno falla.</p>
+<p><code>tandem coverage [input.tdm]</code> y <code>tandem profile [input.tdm]</code> compilan y ejecutan el programa mientras registran qué líneas de Tandem se ejecutaron y cuánto tiempo pasó en cada una.</p>
+<p><code>tandem dap</code> inicia un adaptador del protocolo de depuración (DAP) sobre stdin/stdout, con puntos de interrupción mapeados de vuelta a las líneas de Tandem.</p>
+<p><code>tandem fmt &lt;input.tdm&gt;</code> formatea un archivo fuente en su lugar.</p>
+<p><code>tandem add &lt;name&gt; [git-url] [--tag &lt;tag&gt;]</code> añade una dependencia git a <code>tandem.config</code> (resolviendo nombres simples contra <code>TANDEM_REGISTRY</code>, por defecto <code>https://github.com</code>) e instala el paquete.</p>
+<p><code>tandem pkg install [project-dir]</code> instala las dependencias declaradas en <code>tandem.config</code>.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../../search.js" defer></script>
+</body>
+</html>

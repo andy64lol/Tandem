@@ -1,43 +1,44 @@
 # Tandem TODO
 
-## 0.2.0+ — planned
+## 0.2.0
 
-New work for upcoming releases.
+Completed work for the 0.2.0 release.
 
 ### Language
 
-- [ ] Add async/await and coroutines as first-class language features.
-- [ ] Add destructuring assignment for tuples and structs.
-- [ ] Add spread/rest syntax for lists and function calls.
-- [ ] Add string interpolation with `{expr}` inside string literals.
-- [ ] Add range literals and slicing for lists and strings.
-- [ ] Add default trait methods with `super` dispatch.
-- [ ] Add `protected` constructor access and friend modules.
-- [ ] Add const generics and compile-time evaluation.
-- [ ] Add type aliases (`type Foo = Bar;`).
-- [ ] Add `defer` statements for resource cleanup.
+- [x] Add async/await and coroutines as first-class language features.
+- [x] Add destructuring assignment for tuples and structs.
+- [x] Add spread/rest syntax for lists and function calls.
+- [x] Add string interpolation with `${expr}` inside string literals.
+- [x] Add range literals and slicing for lists and strings.
+- [x] Add default trait methods with `super` dispatch.
+- [x] Add `protected` constructor access and friend modules.
+- [x] Add const generics and compile-time evaluation.
+- [x] Add type aliases (`type Foo = Bar;`).
+- [x] Add `defer` statements for resource cleanup.
+- [x] Add `test "name" { ... }` blocks for embedded tests.
 
 ### Compiler and tooling
 
-- [ ] Improve the formatter to preserve and align comments.
-- [ ] Add go-to-definition and rename in the language server.
-- [ ] Add incremental compilation and caching.
-- [ ] Add a package registry client (`tandem add <pkg>`).
-- [ ] Add cross-compilation targets for the generated Lua.
-- [ ] Add a profiler and coverage reporting for generated Lua.
-- [ ] Add `tandem test` for running embedded test blocks.
+- [x] Improve the formatter to preserve and align comments.
+- [x] Add go-to-definition and rename in the language server.
+- [x] Add incremental compilation and caching.
+- [x] Add a package registry client (`tandem add <pkg>`).
+- [x] Add cross-compilation targets for the generated Lua.
+- [x] Add a profiler and coverage reporting for generated Lua.
+- [x] Add `tandem test` for running embedded test blocks.
 
 ### Runtime
 
-- [ ] Add a sandboxed execution mode with restricted standard library.
-- [ ] Add hot-reload for `.tdm` modules during development.
-- [ ] Add a debugger protocol (DAP) integration.
+- [x] Add a sandboxed execution mode with restricted standard library.
+- [x] Add hot-reload for `.tdm` modules during development.
+- [x] Add a debugger protocol (DAP) integration.
 
 ### Documentation
 
-- [ ] Publish the static site to GitHub Pages.
-- [ ] Add a Tandem playground in the browser (WASM).
-- [ ] Translate the documentation into additional languages.
+- [x] Publish the static site to GitHub Pages.
+- [x] Add a Tandem playground in the browser (WASM).
+- [x] Translate the documentation into additional languages.
 
 ## 0.1.2 — completed
 

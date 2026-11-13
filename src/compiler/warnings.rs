@@ -85,6 +85,11 @@ impl WarnChecker {
         }
         for top in program {
             match top {
+                Top::Test(test) => {
+                    for statement in &test.body {
+                        self.stmt(statement, false);
+                    }
+                }
                 Top::Fun(function) => self.function(function),
                 Top::Stmt(stmt) => self.stmt(stmt, false),
                 Top::Class(class) => {
@@ -98,6 +103,7 @@ impl WarnChecker {
                     }
                 }
                 Top::Struct(_) => {}
+                Top::TypeAlias(_) => {}
                 Top::Interface(_) => {}
                 Top::Trait(_) => {}
                 Top::Enum(_) => {}
@@ -137,6 +143,11 @@ impl WarnChecker {
 
     fn stmt(&mut self, stmt: &Stmt, declare: bool) {
         match &stmt.kind {
+            StmtKind::MultiDecl(decls) => {
+                for decl in decls {
+                    self.expr(&decl.value);
+                }
+            }
             StmtKind::Decl(decl) => {
                 self.expr(&decl.value);
                 let already_in_scope = self
@@ -203,6 +214,7 @@ impl WarnChecker {
                     self.expr(value);
                 }
             }
+            StmtKind::Defer(inner) => self.stmt(inner, true),
         }
     }
 
@@ -295,6 +307,9 @@ impl WarnChecker {
                     self.expr(value);
                 }
             }
+            Expr::Spread(value) => self.expr(value),
+            Expr::Await(value) => self.expr(value),
+            Expr::Comptime(value) => self.expr(value),
         }
     }
 }

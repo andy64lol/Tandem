@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tandem Playground</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="wrap">
+        <h1>Tandem Playground</h1>
+        <p>Compile Tandem to Lua in your browser. Build the playground with
+           <code>cargo build -p tandem-playground --target wasm32-unknown-unknown</code>
+           and run <code>wasm-pack build playground</code> to produce the wasm module.</p>
+        <textarea id="source" rows="16" cols="80">int x = 1;
+fn greet(str name) { print("Hello, " + name); }
+greet("Tandem");</textarea>
+        <br>
+        <button id="run">Compile</button>
+        <pre id="output"></pre>
+    </main>
+    <script type="module">
+        import init, { compile } from "./playground/tandem_playground.js";
+        await init();
+        document.getElementById("run").addEventListener("click", () => {
+            const source = document.getElementById("source").value;
+            try {
+                document.getElementById("output").textContent = compile(source);
+            } catch (error) {
+                document.getElementById("output").textContent = String(error);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>11. API de Rust - Tandem</title>
+    <link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="../index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="../01-introduction.html">01-introduction</a></li>
+<li><a href="../02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="../03-types.html">03-types</a></li>
+<li><a href="../04-variables.html">04-variables</a></li>
+<li><a href="../05-functions.html">05-functions</a></li>
+<li><a href="../06-statements.html">06-statements</a></li>
+<li><a href="../07-expressions.html">07-expressions</a></li>
+<li><a href="../08-comments.html">08-comments</a></li>
+<li><a href="../12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="../09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="../10-cli.html">10-cli</a></li>
+<li><a href="../11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="../13-limitations.html">13-limitations</a></li>
+</ul>
+<h3 class="sidebar-group-title">Español</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html" class="active">11-rust-api</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../../index.html">Home</a>
+            <a href="../../docs/stdlib/index.html">Standard Library</a>
+            <span>11. API de Rust</span>
+        </div>
+        <div class="search-bar" data-search-index="../../search-index.json" data-site-root="../../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="11-api-de-rust">11. API de Rust</h1>
+<p>Tandem usa <a href="https://docs.rs/mlua/"><code>mlua</code></a> con Lua 5.4 y su build de Lua vendido. La biblioteca de Rust expone el compilador y el runtime como módulos separados:</p>
+<ul>
+<li><code>tandem::compiler::compile(&amp;str) -&gt; Result&lt;String, Vec&lt;Diagnostic&gt;&gt;</code> analiza y comprueba los tipos del código fuente de Tandem y devuelve el Lua generado. Ante cualquier diagnóstico devuelve los diagnósticos; como las advertencias son fatales, una sola advertencia también falla la compilación.</li>
+<li><code>tandem::compiler::Diagnostic</code> lleva una <code>severity</code> (<code>Severity::Error</code> o <code>Severity::Warning</code>), un <code>message</code> y valores opcionales <code>line</code> y <code>column</code>.</li>
+<li><code>tandem::runtime::run_file(path)</code> ejecuta un archivo Lua existente.</li>
+<li><code>tandem::runtime::run_source(source, chunk_name)</code> ejecuta código fuente Lua mantenido en memoria.</li>
+<li><code>tandem::runtime::RuntimeConfig</code> establece límites opcionales de memoria e instrucciones de Lua.</li>
+<li><code>tandem::runtime::run_source_with_setup(...)</code> ejecuta Lua después de que un callback anfitrión haya instalado APIs de Lua adicionales.</li>
+<li><code>tandem::mlua</code> re-exporta el crate <code>mlua</code> para que anfitriones y runtime usen los mismos tipos de Lua.</li>
+</ul>
+<h2 id="ejecutar-un-archivo-lua-desde-rust">Ejecutar un archivo Lua desde Rust</h2>
+<pre><code>fn main() -&gt; Result&lt;(), String&gt; {
+    tandem::runtime::run_file(&quot;script.lua&quot;)
+}</code></pre>
+<p>Para un script Lua que necesita argumentos de línea de comandos, usa <code>run_file_with_args</code>:</p>
+<pre><code>fn main() -&gt; Result&lt;(), String&gt; {
+    tandem::runtime::run_file_with_args(
+        &quot;script.lua&quot;,
+        &amp;[&quot;first-arg&quot;.to_owned(), &quot;second-arg&quot;.to_owned()],
+    )
+}</code></pre>
+<p>El runtime establece <code>arg[0]</code> en la ruta o nombre del chunk y coloca los argumentos del script suministrados en <code>arg[1]</code>, <code>arg[2]</code>, etc.</p>
+<h2 id="lmites-de-runtime">Límites de runtime</h2>
+<p>Usa <code>RuntimeConfig</code> con las funciones <code>*_with_config</code> para acotar la ejecución de Lua embebido:</p>
+<pre><code>use tandem::runtime::{self, RuntimeConfig};
+
+fn main() -&gt; Result&lt;(), String&gt; {
+    let config = RuntimeConfig {
+        memory_limit: Some(64 * 1024 * 1024),
+        instruction_limit: Some(10_000_000),
+        sandbox: false,
+    };
+    runtime::run_file_with_config(&quot;script.lua&quot;, &amp;[], &amp;config)
+}</code></pre>
+<p><code>memory_limit</code> está en bytes y lo hace cumplir el asignador de Lua. <code>instruction_limit</code> cuenta instrucciones de la VM de Lua y aborta scripts desbocados; el runtime comprueba en lotes de como máximo 10,000 instrucciones. Ambos fallos se devuelven como <code>Err(String)</code>.</p>
+<h2 id="proporcionar-apis-anfitrionas">Proporcionar APIs anfitrionas</h2>
+<p><code>run_source_with_setup</code> llama a un closure con el valor <code>Lua</code> vivo antes de que se ejecute el chunk. El callback puede instalar funciones, tablas o globales y debe devolver <code>Result&lt;(), String&gt;</code>:</p>
+<pre><code>use tandem::runtime::{self, RuntimeConfig};
+
+fn main() -&gt; Result&lt;(), String&gt; {
+    runtime::run_source_with_setup(
+        &quot;print(greet(\&quot;Lua\&quot;))&quot;,
+        &quot;host.lua&quot;,
+        &amp;[],
+        std::path::Path::new(&quot;.&quot;),
+        &amp;RuntimeConfig::default(),
+        |lua| {
+            let greet = lua
+                .create_function(|_, name: String| Ok(format!(&quot;Hello, {name}!&quot;)))
+                .map_err(|error| error.to_string())?;
+            lua.globals()
+                .set(&quot;greet&quot;, greet)
+                .map_err(|error| error.to_string())
+        },
+    )
+}</code></pre>
+<p>Las rutas de búsqueda de paquetes estándar y los paquetes <code>mlua-pkg</code> instalados se configuran antes de que se ejecute el callback.</p>
+<h2 id="compilar-y-ejecutar-cdigo-fuente-desde-rust">Compilar y ejecutar código fuente desde Rust</h2>
+<pre><code>fn main() -&gt; Result&lt;(), String&gt; {
+    let source = r#&quot;
+        fn greet(str name) {
+            print(&quot;Hello, &quot; + name);
+        }
+        greet(&quot;Lua&quot;);
+    &quot;#;
+
+    let lua_source = tandem::compiler::compile(source).map_err(|diagnostics| {
+        diagnostics
+            .iter()
+            .map(|diagnostic| format!(&quot;{}: {}&quot;, diagnostic.severity.label(), diagnostic.message))
+            .collect::&lt;Vec&lt;_&gt;&gt;()
+            .join(&quot;\n&quot;)
+    })?;
+    tandem::runtime::run_source(&amp;lua_source, &quot;generated.lua&quot;)
+}</code></pre>
+<p>La CLI usa la misma API: la entrada <code>.tdm</code> se compila a un archivo <code>.lua</code> y luego se ejecuta, mientras que la entrada <code>.lua</code> se ejecuta directamente. <code>--check</code> compila para validar pero no invoca el runtime.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../../search.js" defer></script>
+</body>
+</html>

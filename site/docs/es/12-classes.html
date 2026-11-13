@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>12. Clases - Tandem</title>
+    <link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="../index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="../01-introduction.html">01-introduction</a></li>
+<li><a href="../02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="../03-types.html">03-types</a></li>
+<li><a href="../04-variables.html">04-variables</a></li>
+<li><a href="../05-functions.html">05-functions</a></li>
+<li><a href="../06-statements.html">06-statements</a></li>
+<li><a href="../07-expressions.html">07-expressions</a></li>
+<li><a href="../08-comments.html">08-comments</a></li>
+<li><a href="../12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="../09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="../10-cli.html">10-cli</a></li>
+<li><a href="../11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="../13-limitations.html">13-limitations</a></li>
+</ul>
+<h3 class="sidebar-group-title">Español</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+<li><a href="12-classes.html" class="active">12-classes</a></li>
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../../index.html">Home</a>
+            <a href="../../docs/stdlib/index.html">Standard Library</a>
+            <span>12. Clases</span>
+        </div>
+        <div class="search-bar" data-search-index="../../search-index.json" data-site-root="../../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="12-clases">12. Clases</h1>
+<p>Las clases agrupan campos tipados con métodos. Define una con <code>class Name { ... }</code>:</p>
+<pre><code>class player {
+    str name = &quot;Ada&quot;;
+    int health = 100;
+
+    constructor(str name) {
+        self.name = name;
+    }
+
+    fn isAlive() -&gt; bool {
+        return health &gt; 0;
+    }
+
+    fn damage(int amount) {
+        health -= amount;
+    }
+}</code></pre>
+<p>Los métodos conservan la palabra clave <code>fn</code>. Se ejecutan con una instancia implícita, disponible como <code>self</code>, que no puede reasignarse. Tandem no usa una palabra clave <code>this</code>. Los campos pueden leerse y asignarse directamente por nombre; escribe <code>self.health</code> cuando un parámetro o variable local tenga el mismo nombre. Los nombres de campo y método no pueden colisionar.</p>
+<p>Los campos se declaran como variables tipadas y normalmente necesitan un inicializador. El valor por defecto se evalúa para cada nueva instancia antes de que se ejecute el cuerpo del constructor; en una clase derivada, los valores por defecto de los campos del hijo se ejecutan después de los constructores base y antes del resto del constructor del hijo. Un campo genérico como <code>T value;</code> puede omitir su inicializador para que el constructor lo establezca. Una clase puede definir como máximo un <code>constructor</code>, y los constructores no pueden declarar un tipo de retorno.</p>
+<h2 id="crear-instancias">Crear instancias</h2>
+<p><code>new</code> crea una instancia. Los paréntesis son opcionales cuando no hay argumentos:</p>
+<pre><code>local class Player = new player;
+local class Rival = new player(&quot;Grace&quot;);</code></pre>
+<p><code>class</code> es un tipo de declaración especial: el compilador distingue una definición de clase (<code>class player { ... }</code>) de una declaración de instancia (<code>class Player = new player;</code>) por la <code>{</code> o el <code>=</code> después del nombre. La variable toma el tipo de clase estático de la expresión <code>new</code>. Se pueden usar <code>local</code> y <code>const</code> como en otras declaraciones. Llamar a un método usa la misma sintaxis de punto que otros miembros; Tandem emite la llamada a método de Lua con <code>:</code>:</p>
+<pre><code>print(Player.name);
+print(Player.isAlive());
+Player.damage(30);
+print(Player.isAlive());</code></pre>
+<p>Los nombres de clase también pueden escribirse directamente como tipos de parámetro, retorno o variable:</p>
+<pre><code>fn alive(player p) -&gt; bool {
+    return p.isAlive();
+}</code></pre>
+<h2 id="miembros-estticos-y-privados">Miembros estáticos y privados</h2>
+<p>Usa <code>static</code> para campos y métodos de clase. Los métodos estáticos no tienen <code>self</code> implícito; accede a los campos estáticos a través del nombre de la clase:</p>
+<pre><code>class Counter {
+    static int value = 0;
+
+    static fn increment() -&gt; int {
+        Counter.value += 1;
+        return Counter.value;
+    }
+}
+
+int current = Counter.increment();</code></pre>
+<p>Los campos estáticos se inicializan cuando se carga la clase. Los campos y métodos estáticos se heredan de las bases de clase.</p>
+<p>Usa <code>private</code> antes de un campo o método para restringir el acceso a la clase que lo declara:</p>
+<pre><code>class Account {
+    private int balance = 0;
+
+    private fn adjust(int amount) {
+        balance += amount;
+    }
+
+    fn deposit(int amount) {
+        self.adjust(amount);
+    }
+}</code></pre>
+<p>La privacidad se comprueba por el compilador. Los nombres existentes, incluidos los nombres estilo Lua con prefijo de guion bajo como <code>_balance</code>, conservan su visibilidad y comportamiento existentes.</p>
+<h2 id="genricos">Genéricos</h2>
+<p>Las funciones genéricas infieren los argumentos de tipo a partir de los argumentos de la llamada. Las clases genéricas requieren argumentos de tipo explícitos al construirse y al usarse como tipos:</p>
+<pre><code>fn identity&lt;T&gt;(T value) -&gt; T {
+    return value;
+}
+
+class Box&lt;T&gt; {
+    T value;
+
+    constructor(T value) {
+        self.value = value;
+    }
+
+    fn get() -&gt; T {
+        return value;
+    }
+}
+
+Box&lt;int&gt; box = new Box&lt;int&gt;(identity(42));
+int value = box.get();</code></pre>
+<p>Los parámetros genéricos pueden aparecer dentro de tipos de colección existentes, por ejemplo <code>list T</code> o <code>table str T</code>. Los tipos de clase genérica son invariantes: <code>Box&lt;int&gt;</code> y <code>Box&lt;float&gt;</code> son tipos distintos.</p>
+<p>Las clases no se crean a partir de literales de tabla. <code>player { name = &quot;Ada&quot;, health = 100 }</code> se rechaza; usa <code>new player(&quot;Ada&quot;)</code> en su lugar.</p>
+<h2 id="herencia">Herencia</h2>
+<p>Una clase puede extender varias clases e interfaces. La primera base de clase concreta es la base primaria para <code>super(...)</code>, <code>super.method(...)</code> y los argumentos del constructor; las bases concretas posteriores se inicializan en orden y no deben tener argumentos de constructor requeridos. Los ancestros compartidos se inicializan una sola vez. Las interfaces añaden requisitos de métodos pero ninguna tabla base en tiempo de ejecución.</p>
+<pre><code>class enemy {
+    str name = &quot;enemy&quot;;
+    int health = 10;
+
+    constructor(str name) {
+        self.name = name;
+    }
+
+    fn damage(int amount) {
+        health -= amount;
+    }
+}
+
+class boss extends enemy {
+    int phase = 1;
+
+    constructor(str name, int phase) {
+        super(name);
+        self.phase = phase;
+    }
+
+    fn damage(int amount) {
+        super.damage(amount);
+        phase += 1;
+    }
+}</code></pre>
+<p>Separa las bases concretas con comas. Una interfaz puede listarse en <code>extends</code> o en <code>implements</code>; ambas formas requieren que la clase proporcione cada método declarado con una firma coincidente. Las interfaces pueden extender otras interfaces:</p>
+<pre><code>interface Named {
+    fn name() -&gt; str;
+}
+
+interface Renderable extends Named {
+    fn render() -&gt; str;
+}
+
+class Sprite extends Asset, Drawable implements Renderable {
+    fn name() -&gt; str { return &quot;sprite&quot;; }
+    fn render() -&gt; str { return &quot;image&quot;; }
+}</code></pre>
+<p>El hijo hereda campos, métodos y miembros estáticos de cada base de clase concreta. Si las bases proporcionan el mismo método, gana la primera base con ese método; se rechazan los tipos de campo heredados en conflicto. Los campos declarados en el hijo no deben reutilizar un nombre heredado con un tipo diferente, y sobrescribir un método requiere los mismos tipos de parámetro y retorno. Un campo y un método no pueden compartir un nombre en ninguna parte de la cadena de herencia.</p>
+<p>Si el hijo declara un constructor, su primera sentencia debe llamar a <code>super(...)</code> con argumentos para el constructor de la base primaria. El compilador inicializa entonces las bases concretas posteriores antes de los campos del hijo y el resto del cuerpo del constructor. Si el hijo no declara un constructor, su constructor generado acepta los argumentos del constructor de la base primaria e inicializa cada base antes de los propios campos del hijo. Los ancestros compartidos se ejecutan una vez, incluida la herencia en forma de diamante.</p>
+<p>Usa <code>super.method(...)</code> para llamar a la implementación de la base primaria de un método sobrescrito. <code>super</code> no puede usarse en una clase sin una base concreta y solo está disponible dentro de métodos de instancia y constructores.</p>
+<p>Una instancia del hijo puede usarse donde se espera el tipo de la clase padre:</p>
+<pre><code>fn hurt(enemy target) {
+    target.damage(5);
+}
+
+hurt(new boss(&quot;Dragon&quot;, 2));</code></pre>
+<p>El despacho de métodos es dinámico, por lo que esto llama a <code>boss.damage</code> aunque el parámetro esté tipado como <code>enemy</code>.</p>
+<h2 id="lua-generado">Lua generado</h2>
+<p>Las clases compilan a tablas y metatablas Lua ordinarias. La tabla de la clase contiene los métodos y se convierte en la metatabla <code>__index</code> de cada instancia. La construcción se divide en <code>.new</code>, que asigna la instancia, y <code>:__init</code>, que inicializa los campos y ejecuta el constructor:</p>
+<pre><code>local Hero, player
+local __tandem_init_state = setmetatable({}, { __mode = &quot;k&quot; })
+player = {}
+player.__index = player
+
+function player.new(name)
+    local self = setmetatable({}, player)
+    __tandem_init_state[self] = {}
+    self:__init(name)
+    return self
+end
+
+function player:__init(name)
+    local initialized = __tandem_init_state[self]
+    if initialized[&quot;player&quot;] then return end
+    initialized[&quot;player&quot;] = true
+    self.name = &quot;Ada&quot;
+    self.health = 100
+    self.name = name
+end
+
+function player:isAlive()
+    return (self.health &gt; 0)
+end
+
+Hero = player.new(&quot;Ada&quot;)
+print(Hero:isAlive())</code></pre>
+<p>Una clase derivada apunta su metatabla a sus bases, por lo que los métodos heredados se encuentran en orden:</p>
+<pre><code>boss = setmetatable({}, { __index = enemy })
+boss.__index = boss</code></pre>
+<p>Su <code>__init</code> llama a <code>super.__init(self, ...)</code> explícitamente, lo que mantiene la identidad de la instancia mientras ejecuta el inicializador del padre:</p>
+<pre><code>function boss:__init(name, phase)
+    local super = enemy
+    super.__init(self, name)
+    self.phase = 1
+    self.phase = phase
+end</code></pre>
+<p>Los campos son entradas normales de tabla en la instancia. Los métodos son entradas de tabla en la clase, encontradas a través de <code>__index</code>. Tandem emite llamadas con dos puntos para los métodos de clase para que Lua pase <code>self</code> automáticamente. No se requiere ninguna biblioteca en tiempo de ejecución ni representación de valores específica de Tandem.</p>
+<h2 id="restricciones-actuales">Restricciones actuales</h2>
+<p>Las clases siguen siendo privadas al módulo. Los getters y setters, <code>instanceof</code>, las expresiones de clase, los nombres de miembro calculados, el acceso abstract/final/protected y las clases exportadas no están implementados todavía. Consulta <a href="13-limitations.html">Limitaciones</a> y la <a href="../todo.html">lista de tareas del proyecto</a>.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../../search.js" defer></script>
+</body>
+</html>

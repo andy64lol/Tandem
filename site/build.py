@@ -33,6 +33,12 @@ GROUPS: list[tuple[str, list[str]]] = [
     ("Language", ["03-types.md", "04-variables.md", "05-functions.md", "06-statements.md", "07-expressions.md", "08-comments.md", "12-classes.md"]),
     ("Tooling", ["09-diagnostics.md", "10-cli.md", "11-rust-api.md"]),
     ("Reference", ["13-limitations.md"]),
+    ("Español", [
+        "es/README.md", "es/01-introduction.md", "es/02-getting-started.md", "es/03-types.md",
+        "es/04-variables.md", "es/05-functions.md", "es/06-statements.md", "es/07-expressions.md",
+        "es/08-comments.md", "es/09-diagnostics.md", "es/10-cli.md", "es/11-rust-api.md",
+        "es/12-classes.md", "es/13-limitations.md",
+    ]),
 ]
 
 STDLIB_MODULES = [
@@ -47,8 +53,8 @@ STDLIB_MODULES = [
 
 def out_name(md_rel: str) -> str:
     """docs-relative markdown path -> site/docs-relative HTML path."""
-    if md_rel == "README.md":
-        return "index.html"
+    if os.path.basename(md_rel) == "README.md":
+        return os.path.join(os.path.dirname(md_rel), "index.html").replace(os.sep, "/").lstrip("./")
     return md_rel[:-3] + ".html"
 
 

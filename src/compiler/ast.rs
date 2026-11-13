@@ -48,6 +48,8 @@ pub(crate) enum Ty {
     Enum(String),
     /// A nominal discriminated union type.
     Union(String),
+    /// A compile-time integer constant used as a const generic argument.
+    Const(i64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,6 +124,11 @@ pub(crate) enum Expr {
     InstanceOf(Box<Expr>, String),
     /// A `match` expression.
     Match(Box<MatchExpr>),
+    Spread(Box<Expr>),
+    /// `await expr`, which runs an async value to completion.
+    Await(Box<Expr>),
+    /// `comptime(expr)`, evaluated by the compiler.
+    Comptime(Box<Expr>),
 }
 
 #[derive(Clone, Debug)]
@@ -158,6 +165,7 @@ pub(crate) struct FnSig {
     pub(crate) ret: Ty,
     pub(crate) varargs: bool,
     pub(crate) generic: Vec<String>,
+    pub(crate) is_async: bool,
 }
 
 #[derive(Clone)]
@@ -268,6 +276,7 @@ pub(crate) struct Stmt {
 #[derive(Clone, Debug)]
 pub(crate) enum StmtKind {
     Decl(VarDecl),
+    MultiDecl(Vec<VarDecl>),
     Assign(String, String, Expr),
     AssignMember(Box<Expr>, String, String, Expr),
     AssignIndex(Box<Expr>, Box<Expr>, String, Expr),
@@ -283,6 +292,7 @@ pub(crate) enum StmtKind {
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),
+    Defer(Box<Stmt>),
 }
 #[derive(Clone, Debug)]
 pub(crate) struct VarDecl {
@@ -313,6 +323,9 @@ pub(crate) struct Fun {
     pub(crate) is_final: bool,
     pub(crate) is_getter: bool,
     pub(crate) is_setter: bool,
+    pub(crate) is_async: bool,
+    /// The trait a copied default method came from, if any.
+    pub(crate) trait_default: Option<String>,
     pub(crate) body: Vec<Stmt>,
 }
 #[derive(Clone, Debug)]
@@ -327,6 +340,15 @@ pub(crate) struct StructDef {
     pub(crate) line: usize,
     pub(crate) column: usize,
     pub(crate) fields: Vec<StructField>,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct TypeAliasDef {
+    pub(crate) name: String,
+    pub(crate) ty: Ty,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -353,6 +375,8 @@ pub(crate) struct ClassDef {
     pub(crate) fields: Vec<ClassField>,
     pub(crate) constructor: Option<Fun>,
     pub(crate) methods: Vec<Fun>,
+    /// Modules allowed to access this class's private members.
+    pub(crate) friends: Vec<String>,
     pub(crate) is_abstract: bool,
     pub(crate) is_final: bool,
 }
@@ -410,6 +434,61 @@ pub(crate) struct EnumInfo {
 pub(crate) struct UnionInfo {
     /// Variant name to the type of its payload, if it has one.
     pub(crate) variants: HashMap<String, Option<Ty>>,
+}
+
+/// A value known at compile time.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ConstValue {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bool(bool),
+}
+
+/// Evaluates a literal-only expression at compile time.
+pub(crate) fn eval_const(expr: &Expr) -> Option<ConstValue> {
+    match expr {
+        Expr::Int(value) => Some(ConstValue::Int(*value)),
+        Expr::Float(value) => Some(ConstValue::Float(*value)),
+        Expr::Str(value) => Some(ConstValue::Str(value.clone())),
+        Expr::Bool(value) => Some(ConstValue::Bool(*value)),
+        Expr::Unary(op, value) => match (op.as_str(), eval_const(value)?) {
+            ("-", ConstValue::Int(value)) => Some(ConstValue::Int(-value)),
+            ("-", ConstValue::Float(value)) => Some(ConstValue::Float(-value)),
+            ("!", ConstValue::Bool(value)) => Some(ConstValue::Bool(!value)),
+            _ => None,
+        },
+        Expr::Bin(left, op, right) => {
+            let left = eval_const(left)?;
+            let right = eval_const(right)?;
+            match (left, op.as_str(), right) {
+                (ConstValue::Int(a), "+", ConstValue::Int(b)) => Some(ConstValue::Int(a + b)),
+                (ConstValue::Int(a), "-", ConstValue::Int(b)) => Some(ConstValue::Int(a - b)),
+                (ConstValue::Int(a), "*", ConstValue::Int(b)) => Some(ConstValue::Int(a * b)),
+                (ConstValue::Int(a), "/", ConstValue::Int(b)) if b != 0 => Some(ConstValue::Int(a / b)),
+                (ConstValue::Int(a), "%", ConstValue::Int(b)) if b != 0 => Some(ConstValue::Int(a % b)),
+                (ConstValue::Float(a), "+", ConstValue::Float(b)) => Some(ConstValue::Float(a + b)),
+                (ConstValue::Float(a), "-", ConstValue::Float(b)) => Some(ConstValue::Float(a - b)),
+                (ConstValue::Float(a), "*", ConstValue::Float(b)) => Some(ConstValue::Float(a * b)),
+                (ConstValue::Float(a), "/", ConstValue::Float(b)) => Some(ConstValue::Float(a / b)),
+                (ConstValue::Str(a), "+", ConstValue::Str(b))
+                | (ConstValue::Str(a), ",", ConstValue::Str(b)) => {
+                    Some(ConstValue::Str(a + &b))
+                }
+                (ConstValue::Int(a), "==", ConstValue::Int(b)) => Some(ConstValue::Bool(a == b)),
+                (ConstValue::Int(a), "!=", ConstValue::Int(b)) => Some(ConstValue::Bool(a != b)),
+                (ConstValue::Int(a), "<", ConstValue::Int(b)) => Some(ConstValue::Bool(a < b)),
+                (ConstValue::Int(a), ">", ConstValue::Int(b)) => Some(ConstValue::Bool(a > b)),
+                (ConstValue::Int(a), "<=", ConstValue::Int(b)) => Some(ConstValue::Bool(a <= b)),
+                (ConstValue::Int(a), ">=", ConstValue::Int(b)) => Some(ConstValue::Bool(a >= b)),
+                (ConstValue::Bool(a), "&&", ConstValue::Bool(b)) => Some(ConstValue::Bool(a && b)),
+                (ConstValue::Bool(a), "||", ConstValue::Bool(b)) => Some(ConstValue::Bool(a || b)),
+                _ => None,
+            }
+        }
+        Expr::Comptime(value) => eval_const(value),
+        _ => None,
+    }
 }
 
 pub(crate) fn substitute_type(ty: &Ty, bindings: &HashMap<String, Ty>) -> Ty {
@@ -471,12 +550,23 @@ pub(crate) enum Top {
     Fun(Fun),
     Stmt(Stmt),
     Struct(StructDef),
+    TypeAlias(TypeAliasDef),
     Interface(InterfaceDef),
     Trait(TraitDef),
     Class(ClassDef),
     Enum(EnumDef),
     Union(UnionDef),
     Mixin(MixinDef),
+    Test(TestBlock),
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct TestBlock {
+    pub(crate) name: String,
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+    pub(crate) body: Vec<Stmt>,
 }
 
 #[derive(Clone, Debug)]
@@ -575,11 +665,13 @@ pub(crate) fn retyped_global_names(program: &[Top]) -> HashSet<String> {
                 }
             }
             Top::Struct(_) => {}
+            Top::TypeAlias(_) => {}
             Top::Interface(_) => {}
             Top::Trait(_) => {}
             Top::Enum(_) => {}
             Top::Union(_) => {}
             Top::Mixin(_) => {}
+            Top::Test(_) => {}
             Top::Import { .. } => {}
         }
     }

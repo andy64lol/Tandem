@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>9. Diagnósticos - Tandem</title>
+    <link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="../index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="../01-introduction.html">01-introduction</a></li>
+<li><a href="../02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="../03-types.html">03-types</a></li>
+<li><a href="../04-variables.html">04-variables</a></li>
+<li><a href="../05-functions.html">05-functions</a></li>
+<li><a href="../06-statements.html">06-statements</a></li>
+<li><a href="../07-expressions.html">07-expressions</a></li>
+<li><a href="../08-comments.html">08-comments</a></li>
+<li><a href="../12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="../09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="../10-cli.html">10-cli</a></li>
+<li><a href="../11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="../13-limitations.html">13-limitations</a></li>
+</ul>
+<h3 class="sidebar-group-title">Español</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="09-diagnostics.html" class="active">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../../index.html">Home</a>
+            <a href="../../docs/stdlib/index.html">Standard Library</a>
+            <span>9. Diagnósticos</span>
+        </div>
+        <div class="search-bar" data-search-index="../../search-index.json" data-site-root="../../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="9-diagnsticos">9. Diagnósticos</h1>
+<p>Tandem reporta dos tipos de diagnóstico: <strong>errores</strong> y <strong>advertencias</strong>. Ambos detienen la compilación. Si el compilador produce aunque sea un diagnóstico, no se genera, escribe ni ejecuta ningún Lua.</p>
+<h2 id="errores">Errores</h2>
+<p>Un error es una violación del lenguaje: un error de sintaxis, una discordancia de tipos, un nombre desconocido, una asignación inválida, etc. Toda sentencia debe terminar en <code>;</code>, por lo que omitirlo es un error:</p>
+<pre><code>int x = 1
+// error: expected &#x27;;&#x27;</code></pre>
+<p>Los errores de sintaxis son recuperables. Tras una sentencia o declaración malformada, el parser avanza hasta el siguiente límite de sentencia, por lo que una sola compilación puede reportar varios errores de sintaxis con sus ubicaciones. Si el análisis tiene éxito, se comprueba el tipo de cada módulo y se reporta el primer error de cada módulo.</p>
+<p>Todo error de parser, lexer y tipo incluye línea y columna. Las ubicaciones usan líneas y columnas basadas en uno.</p>
+<h2 id="advertencias">Advertencias</h2>
+<p>Una advertencia señala código que es legal pero sospechoso. Tandem es deliberadamente estricto: una sola advertencia es fatal, por lo que las advertencias se comportan como errores y bloquean la generación de código. Las comprobaciones de advertencia actuales son:</p>
+<ul>
+<li>una variable oculta una declaración en un alcance exterior;</li>
+<li>una variable local o parámetro nunca se usa;</li>
+<li>una sentencia es inalcanzable porque sigue a un <code>return</code>.</li>
+</ul>
+<pre><code>fn f() -&gt; int {
+    int unused = 1;   // warning: unused variable &#x27;unused&#x27;
+    return unused;
+}</code></pre>
+<p>El compilador recopila todas las advertencias del programa y las reporta juntas. Los marcadores de posición de <code>printf(&quot;{name}&quot;)</code> cuentan como usos, por lo que una variable usada solo dentro de un formato <code>printf</code> no se reporta.</p>
+<h2 id="reporte">Reporte</h2>
+<p>Cada diagnóstico se imprime con su severidad, su mensaje y la ruta fuente con la ubicación:</p>
+<pre><code>error: expected &#x27;;&#x27;, found &#x27;int&#x27; at line 2, column 1
+ --&gt; examples/hello.tdm:2:1
+
+warning: unused variable &#x27;unused&#x27;
+ --&gt; examples/hello.tdm</code></pre>
+<p>Los mensajes incluyen el tipo de token que se encontró donde el compilador esperaba otra cosa, por ejemplo <code>expected &#x27;;&#x27;, found &#x27;}&#x27;</code> o <code>expected expression, found &#x27;;&#x27;</code>. Los mensajes de estado y diagnóstico usan colores ANSI cuando el flujo de salida es una terminal.</p>
+<p>Los errores de tipo usan la misma forma. Por ejemplo, un retorno faltante reporta la ubicación de la declaración de la función:</p>
+<pre><code>error: function &#x27;f&#x27; must return a value on every path at line 1, column 1
+ --&gt; examples/missing-return.tdm:1:1</code></pre>
+<p>Como las advertencias bloquean la generación de código, <code>tandem</code> no escribe ningún archivo <code>.lua</code> y tanto <code>tandem</code> como <code>tandem --check</code> salen con un estado distinto de cero cuando hay un diagnóstico presente. La API de Rust devuelve los diagnósticos como un <code>Vec&lt;Diagnostic&gt;</code>; consulta <a href="11-rust-api.html">API de Rust</a>.</p>
+<h2 id="mapas-de-fuente">Mapas de fuente</h2>
+<p>El Lua generado mantiene un enlace de vuelta al código fuente de Tandem. Cada sentencia y firma de función generada termina con un comentario de Lua que nombra la línea y columna originales:</p>
+<pre><code>x = 1 -- tdm:1:1
+if (x &gt; 0) then -- tdm:2:1
+    print(&quot;yes&quot;) -- tdm:3:5
+end</code></pre>
+<p>El marcador es <code>-- tdm:&lt;line&gt;:&lt;column&gt;</code>. Los editores y herramientas de depuración pueden analizarlo para mapear una línea de Lua generado de vuelta al archivo <code>.tdm</code>. Las sentencias anidadas llevan sus propios marcadores, por lo que el marcador más interno en una línea es la ubicación más precisa.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../../search.js" defer></script>
+</body>
+</html>

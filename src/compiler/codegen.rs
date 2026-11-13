@@ -74,6 +74,7 @@ fn method_signature(method: &Fun) -> FnSig {
         ret: method.ret.clone(),
         varargs: false,
         generic: method.generic.clone(),
+        is_async: method.is_async,
     }
 }
 
@@ -345,6 +346,13 @@ fn implicit_field_type(
     if let (Some(class), Ty::Applied(_, arguments)) = (ctx.classes.get(class_name), &self_ty) {
         bindings.extend(class.generic.iter().cloned().zip(arguments.iter().cloned()));
     }
+    if ctx
+        .classes
+        .get(class_name)
+        .is_some_and(|class| class.generic.iter().any(|param| param == &format!("const:{name}")))
+    {
+        return Some(Ty::Int);
+    }
     class_field(ctx, class_name, name).map(|ty| substitute_type(&ty, &bindings))
 }
 
@@ -587,6 +595,12 @@ fn inferred_expr_type(
             inferred_expr_type(&arm.body, scopes, function_returns, ctx)
         }
         Expr::Lambda(_) | Expr::FuncRef(_) | Expr::MethodRef(_) => None,
+        Expr::Spread(inner) => inferred_expr_type(inner, scopes, function_returns, ctx),
+        Expr::Comptime(inner) => inferred_expr_type(inner, scopes, function_returns, ctx),
+        Expr::Await(inner) => match inferred_expr_type(inner, scopes, function_returns, ctx)? {
+            Ty::Applied(name, args) if name == "Future" && args.len() == 1 => Some(args[0].clone()),
+            other => Some(other),
+        },
     }
 }
 
@@ -704,13 +718,26 @@ fn emit_expr(
                     emit_expr(b, scopes, function_returns, ctx)
                 );
             }
+            // Range literal: 1..10
+            if op == ".." {
+                if let (Some(Ty::Int), Some(Ty::Int)) = (
+                    inferred_expr_type(a, scopes, function_returns, ctx),
+                    inferred_expr_type(b, scopes, function_returns, ctx),
+                ) {
+                    return format!(
+                        "(function() local r = {{}} for i = {}, {} do r[#r+1] = i end return r end)()",
+                        emit_expr(a, scopes, function_returns, ctx),
+                        emit_expr(b, scopes, function_returns, ctx)
+                    );
+                }
+            }
             let lua_op = match op.as_str() {
                 "&&" => "and",
                 "||" => "or",
                 "," => "..",
                 "!=" => "~=",
                 "+" if is_string_expr(a, scopes, function_returns, ctx)
-                    && is_string_expr(b, scopes, function_returns, ctx) =>
+                    || is_string_expr(b, scopes, function_returns, ctx) =>
                 {
                     ".."
                 }
@@ -742,7 +769,21 @@ fn emit_expr(
             "{}({})",
             if n == "print" { "print" } else { n },
             a.iter()
-                .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
+                .map(|arg| match arg {
+                    Expr::Spread(inner) => format!("table.unpack({})", emit_expr(inner, scopes, function_returns, ctx)),
+        Expr::Comptime(inner) => match crate::compiler::ast::eval_const(inner) {
+            Some(crate::compiler::ast::ConstValue::Int(value)) => value.to_string(),
+            Some(crate::compiler::ast::ConstValue::Float(value)) => format!("{value:?}"),
+            Some(crate::compiler::ast::ConstValue::Str(value)) => lua_str(&value),
+            Some(crate::compiler::ast::ConstValue::Bool(value)) => value.to_string(),
+            None => "nil".to_string(),
+        },
+        Expr::Await(inner) => format!(
+            "(function(c) local ok, value = coroutine.resume(c); if not ok then error(value, 0) end; while coroutine.status(c) ~= \"dead\" do ok, value = coroutine.resume(c); if not ok then error(value, 0) end end; return value end)({})",
+            emit_expr(inner, scopes, function_returns, ctx)
+        ),
+                    _ => emit_expr(arg, scopes, function_returns, ctx),
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -754,14 +795,23 @@ fn emit_expr(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        Expr::NewTyped(name, _, args) => format!(
-            "{}.new({})",
-            name,
-            args.iter()
-                .map(|arg| emit_expr(arg, scopes, function_returns, ctx))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        Expr::NewTyped(name, type_args, args) => {
+            let mut call_args = Vec::new();
+            if let Some(class) = ctx.classes.get(name) {
+                for (param, argument) in class.generic.iter().zip(type_args.iter()) {
+                    if param.starts_with("const:") {
+                        if let Ty::Const(value) = argument {
+                            call_args.push(value.to_string());
+                        }
+                    }
+                }
+            }
+            call_args.extend(
+                args.iter()
+                    .map(|arg| emit_expr(arg, scopes, function_returns, ctx)),
+            );
+            format!("{}.new({})", name, call_args.join(", "))
+        }
         Expr::SuperCall(args) => {
             let args = args
                 .iter()
@@ -865,11 +915,29 @@ fn emit_expr(
             )
         }
         Expr::SuperMember(name) => format!("super.{name}"),
-        Expr::Index(base, index) => format!(
-            "{}[{}]",
-            emit_expr(base, scopes, function_returns, ctx),
-            emit_expr(index, scopes, function_returns, ctx)
-        ),
+        Expr::Index(base, index) => {
+            if let Expr::Bin(start, op, stop) = index.as_ref() {
+                if op == ".." {
+                    return format!(
+                        "(function(t, s, e) local r = {{}} for i = s, e do if t[i] ~= nil then r[#r+1] = t[i] end end return r end)({}, {}, {})",
+                        emit_expr(base, scopes, function_returns, ctx),
+                        emit_expr(start, scopes, function_returns, ctx),
+                        emit_expr(stop, scopes, function_returns, ctx)
+                    );
+                }
+            }
+            let base_str = emit_expr(base, scopes, function_returns, ctx);
+            let base_str = if base_str.starts_with('{') {
+                format!("({base_str})")
+            } else {
+                base_str
+            };
+            format!(
+                "{}[{}]",
+                base_str,
+                emit_expr(index, scopes, function_returns, ctx)
+            )
+        }
         Expr::Cast(value, _) => emit_expr(value, scopes, function_returns, ctx),
         Expr::Table(fields) => format!(
             "{{ {} }}",
@@ -905,6 +973,18 @@ fn emit_expr(
                 .map(|value| emit_expr(value, scopes, function_returns, ctx))
                 .collect::<Vec<_>>()
                 .join(", ")
+        ),
+        Expr::Spread(inner) => format!("table.unpack({})", emit_expr(inner, scopes, function_returns, ctx)),
+        Expr::Comptime(inner) => match crate::compiler::ast::eval_const(inner) {
+            Some(crate::compiler::ast::ConstValue::Int(value)) => value.to_string(),
+            Some(crate::compiler::ast::ConstValue::Float(value)) => format!("{value:?}"),
+            Some(crate::compiler::ast::ConstValue::Str(value)) => lua_str(&value),
+            Some(crate::compiler::ast::ConstValue::Bool(value)) => value.to_string(),
+            None => "nil".to_string(),
+        },
+        Expr::Await(inner) => format!(
+            "(function(c) local ok, value = coroutine.resume(c); if not ok then error(value, 0) end; while coroutine.status(c) ~= \"dead\" do ok, value = coroutine.resume(c); if not ok then error(value, 0) end end; return value end)({})",
+            emit_expr(inner, scopes, function_returns, ctx)
         ),
         Expr::Lambda(function) => {
             let params = function
@@ -1201,9 +1281,36 @@ fn emit_stmts(
     ctx: &Ctx,
 ) {
     let pad = "    ".repeat(indent);
+    let mut deferred: Vec<&Stmt> = Vec::new();
+    for s in stmts {
+        if let StmtKind::Defer(inner) = &s.kind {
+            deferred.push(inner);
+        }
+    }
     for s in stmts {
         let start = out.len();
         match &s.kind {
+            StmtKind::MultiDecl(decls) => {
+                for decl in decls {
+                    let value = emit_list_replacement(
+                        &decl.name,
+                        &decl.value,
+                        scopes,
+                        function_returns,
+                        ctx,
+                    )
+                    .unwrap_or_else(|| emit_expr(&decl.value, scopes, function_returns, ctx));
+                    let ty = declaration_type(decl, scopes, function_returns, ctx);
+                    let current_scope = scopes.last_mut().unwrap();
+                    if current_scope.contains_key(&decl.name) {
+                        out.push_str(&format!("{pad}{} = {value}\n", decl.name));
+                    } else {
+                        out.push_str(&format!("{pad}local {} = {value}\n", decl.name));
+                    }
+                    current_scope.insert(decl.name.clone(), ty);
+                }
+                continue;
+            }
             StmtKind::Decl(decl) => {
                 let value = emit_list_replacement(
                     &decl.name,
@@ -1350,8 +1457,28 @@ fn emit_stmts(
                     .map(|x| format!(" {}", emit_expr(x, scopes, function_returns, ctx)))
                     .unwrap_or_default()
             )),
+            StmtKind::Defer(inner) => {
+                // Deferred statements are emitted at the end of the enclosing block.
+                // For simplicity, emit the inner statement now but mark it; we handle
+                // collection below by re-scanning. Actually, emit it here in reverse
+                // order is complex; instead emit immediately (Go-like defer at scope exit
+                // is approximated by emitting at the end of this statement list).
+                let _ = inner;
+            }
         }
         annotate_line(out, start, s.line, s.column);
+    }
+    for deferred_stmt in deferred.iter().rev() {
+        let start = out.len();
+        emit_stmts(
+            std::slice::from_ref(*deferred_stmt),
+            out,
+            indent,
+            scopes,
+            function_returns,
+            ctx,
+        );
+        annotate_line(out, start, deferred_stmt.line, deferred_stmt.column);
     }
 }
 
@@ -1488,7 +1615,15 @@ fn emit_class(
     }
 
     let effective = effective_constructor(program, class);
-    let new_params = param_list(effective).join(", ");
+    let const_params = class
+        .generic
+        .iter()
+        .filter_map(|param| param.strip_prefix("const:"))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let mut new_params = const_params.clone();
+    new_params.extend(param_list(effective));
+    let new_params = new_params.join(", ");
     let init_args = param_list(effective).join(", ");
     let start = out.len();
     out.push_str(&format!("function {}.new({new_params})\n", class.name));
@@ -1498,6 +1633,9 @@ fn emit_class(
         class.name
     ));
     out.push_str("    __tandem_init_state[self] = {}\n");
+    for param in &const_params {
+        out.push_str(&format!("    self.{param} = {param}\n"));
+    }
     out.push_str(&format!("    self:__init({init_args})\n"));
     out.push_str("    return self\nend\n\n");
 
@@ -1610,7 +1748,20 @@ fn emit_class(
             }
             scopes.push(static_scope);
             emit_params(out, &method.params, scopes, function_returns, ctx);
-            emit_stmts(&method.body, out, 1, scopes, function_returns, ctx);
+            if method.is_async {
+                out.push_str("    return coroutine.create(function()\n");
+            }
+            emit_stmts(
+                &method.body,
+                out,
+                if method.is_async { 2 } else { 1 },
+                scopes,
+                function_returns,
+                ctx,
+            );
+            if method.is_async {
+                out.push_str("    end)\n");
+            }
             scopes.pop();
             out.push_str("end\n\n");
             continue;
@@ -1629,11 +1780,30 @@ fn emit_class(
                 .chain(std::iter::once(("self".into(), self_ty.clone())))
                 .collect(),
         );
-        if let Some(parent) = parents.first() {
-            out.push_str(&format!("    local super = {parent}\n"));
+        if method.is_async {
+            out.push_str("    return coroutine.create(function()\n");
+        }
+        let super_indent = if method.is_async { "        " } else { "    " };
+        if method.trait_default.is_some() {
+            let trait_name = method.trait_default.as_ref().unwrap();
+            out.push_str(&format!(
+                "{super_indent}local super = __tdm_trait_{trait_name}.__super\n"
+            ));
+        } else if let Some(parent) = parents.first() {
+            out.push_str(&format!("{super_indent}local super = {parent}\n"));
         }
         emit_params(out, &method.params, scopes, function_returns, ctx);
-        emit_stmts(&method.body, out, 1, scopes, function_returns, ctx);
+        emit_stmts(
+            &method.body,
+            out,
+            if method.is_async { 2 } else { 1 },
+            scopes,
+            function_returns,
+            ctx,
+        );
+        if method.is_async {
+            out.push_str("    end)\n");
+        }
         scopes.pop();
         out.push_str("end\n\n");
     }
@@ -1813,10 +1983,16 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
     let mut export_names = Vec::new();
     for top in program {
         match top {
+            Top::Test(_) => {}
             Top::Interface(_) | Top::Trait(_) | Top::Mixin(_) => {}
-            Top::Enum(_) | Top::Union(_) => {}
+            Top::Enum(_) | Top::Union(_) | Top::TypeAlias(_) => {}
             Top::Fun(function) => {
-                function_returns.insert(function.name.clone(), function.ret.clone());
+                let ret = if function.is_async {
+                    Ty::Applied("Future".into(), vec![function.ret.clone()])
+                } else {
+                    function.ret.clone()
+                };
+                function_returns.insert(function.name.clone(), ret);
                 function_names.push(function.name.clone());
                 if module_mode {
                     export_names.push(function.name.clone());
@@ -1869,6 +2045,59 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
             "local function __tandem_instanceof(value, name)\n    local mt = getmetatable(value)\n    if not mt then return false end\n    if mt.__tandem_class == name then return true end\n    for _, ancestor in ipairs(mt.__tandem_ancestors or {}) do\n        if ancestor == name then return true end\n    end\n    return false\nend\n\n",
         );
     }
+    for top in program {
+        let Top::Trait(trait_def) = top else {
+            continue;
+        };
+        let parent = trait_def
+            .parents
+            .iter()
+            .find(|parent| {
+                program
+                    .iter()
+                    .any(|top| matches!(top, Top::Trait(t) if &t.name == *parent))
+            });
+        match parent {
+            Some(parent) => out.push_str(&format!(
+                "__tdm_trait_{} = {{ __super = __tdm_trait_{} }}\n",
+                trait_def.name, parent
+            )),
+            None => out.push_str(&format!(
+                "__tdm_trait_{} = {{ __super = {{}} }}\n",
+                trait_def.name
+            )),
+        }
+        for method in &trait_def.methods {
+            if method.body.is_empty() {
+                continue;
+            }
+            let params = method
+                .params
+                .iter()
+                .map(|param| param.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "function __tdm_trait_{}:{}({params})\n",
+                trait_def.name, method.name
+            ));
+            let mut trait_scope = HashMap::new();
+            trait_scope.insert("self".to_string(), Ty::Any);
+            for param in &method.params {
+                trait_scope.insert(param.name.clone(), param.ty.clone());
+            }
+            scopes.push(trait_scope);
+            emit_params(&mut out, &method.params, &mut scopes, &function_returns, &ctx);
+            out.push_str(&format!(
+                "    local super = __tdm_trait_{}.__super\n",
+                trait_def.name
+            ));
+            emit_stmts(&method.body, &mut out, 1, &mut scopes, &function_returns, &ctx);
+            scopes.pop();
+            out.push_str("end\n\n");
+        }
+    }
+
     for class_name in ordered_classes(program) {
         if let Some(def) = program.iter().find_map(|top| {
             if let Top::Class(c) = top {
@@ -1920,14 +2149,20 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
                     .collect::<HashMap<_, _>>();
                 scopes.push(function_scope);
                 emit_params(&mut out, &f.params, &scopes, &function_returns, &ctx);
+                if f.is_async {
+                    out.push_str("    return coroutine.create(function()\n");
+                }
                 emit_stmts(
                     &f.body,
                     &mut out,
-                    1,
+                    if f.is_async { 2 } else { 1 },
                     &mut scopes,
                     &function_returns,
                     &ctx,
                 );
+                if f.is_async {
+                    out.push_str("    end)\n");
+                }
                 scopes.pop();
                 scopes = outer_scopes;
                 out.push_str("end\n\n");
@@ -1962,11 +2197,28 @@ fn emit_program(program: &[Top], module_mode: bool) -> String {
             ),
             Top::Class(_) => {}
             Top::Struct(_) => {}
+            Top::Test(test) => {
+                out.push_str("__tdm_tests = __tdm_tests or {}\n");
+                out.push_str(&format!(
+                    "__tdm_tests[{}] = function()\n",
+                    lua_str(&test.name)
+                ));
+                emit_stmts(
+                    &test.body,
+                    &mut out,
+                    1,
+                    &mut scopes,
+                    &function_returns,
+                    &ctx,
+                );
+                out.push_str("end\n\n");
+            }
             Top::Interface(_) => {}
             Top::Trait(_) => {}
             Top::Enum(_) => {}
             Top::Union(_) => {}
             Top::Mixin(_) => {}
+            Top::TypeAlias(_) => {}
             Top::Import { .. } => {}
         }
     }

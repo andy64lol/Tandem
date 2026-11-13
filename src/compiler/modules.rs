@@ -183,6 +183,7 @@ fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
                         ret: function.ret.clone(),
                         varargs: false,
                         generic: function.generic.clone(),
+                        is_async: function.is_async,
                     }),
                 )?;
             }
@@ -238,6 +239,7 @@ fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
                         ret: Ty::Void,
                         varargs: false,
                         generic: constructor.generic.clone(),
+                        is_async: false,
                     }
                 });
                 let mut methods = HashMap::new();
@@ -254,6 +256,7 @@ fn build_exports(program: &[Top]) -> Result<ModuleExports, String> {
                         ret: method.ret.clone(),
                         varargs: false,
                         generic: method.generic.clone(),
+                        is_async: method.is_async,
                     };
                     if method.is_static {
                         static_methods.insert(method.name.clone(), method_signature);
@@ -305,7 +308,9 @@ fn collect_requires(program: &[Top], out: &mut Vec<String>) {
                     collect_stmt_requires(&callable.body, out);
                 }
             }
+            Top::Test(test) => collect_stmt_requires(&test.body, out),
             Top::Struct(_) => {}
+            Top::TypeAlias(_) => {}
             Top::Interface(_) => {}
             Top::Trait(_) => {}
             Top::Enum(_) => {}
@@ -319,7 +324,13 @@ fn collect_requires(program: &[Top], out: &mut Vec<String>) {
 fn collect_stmt_requires(stmts: &[Stmt], out: &mut Vec<String>) {
     for stmt in stmts {
         match &stmt.kind {
+            StmtKind::Defer(inner) => collect_stmt_requires(std::slice::from_ref(inner), out),
             StmtKind::Decl(decl) => collect_expr_requires(&decl.value, out),
+            StmtKind::MultiDecl(decls) => {
+                for decl in decls {
+                    collect_expr_requires(&decl.value, out);
+                }
+            }
             StmtKind::Assign(_, _, value) => collect_expr_requires(value, out),
             StmtKind::AssignMember(base, _, _, value) => {
                 collect_expr_requires(base, out);
@@ -444,6 +455,9 @@ fn collect_expr_requires(expr: &crate::compiler::ast::Expr, out: &mut Vec<String
                 collect_expr_requires(&arm.body, out);
             }
         }
+        Expr::Spread(value) => collect_expr_requires(value, out),
+        Expr::Await(value) => collect_expr_requires(value, out),
+        Expr::Comptime(value) => collect_expr_requires(value, out),
         Expr::Int(_)
         | Expr::Float(_)
         | Expr::Str(_)

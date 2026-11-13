@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>El libro de Tandem - Tandem</title>
+    <link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="../index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="../01-introduction.html">01-introduction</a></li>
+<li><a href="../02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="../03-types.html">03-types</a></li>
+<li><a href="../04-variables.html">04-variables</a></li>
+<li><a href="../05-functions.html">05-functions</a></li>
+<li><a href="../06-statements.html">06-statements</a></li>
+<li><a href="../07-expressions.html">07-expressions</a></li>
+<li><a href="../08-comments.html">08-comments</a></li>
+<li><a href="../12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="../09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="../10-cli.html">10-cli</a></li>
+<li><a href="../11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="../13-limitations.html">13-limitations</a></li>
+</ul>
+<h3 class="sidebar-group-title">Español</h3><ul class="sidebar-group">
+<li><a href="index.html" class="active">README</a></li>
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../../index.html">Home</a>
+            <a href="../../docs/stdlib/index.html">Standard Library</a>
+            <span>El libro de Tandem</span>
+        </div>
+        <div class="search-bar" data-search-index="../../search-index.json" data-site-root="../../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="el-libro-de-tandem">El libro de Tandem</h1>
+<p>Tandem es un lenguaje experimental, estáticamente tipado y de estilo C que transpila a Lua 5.4. Compila archivos fuente <code>.tdm</code> a Lua puro y puede ejecutar tanto el Lua generado como archivos <code>.lua</code> ordinarios a través de su runtime embebido. No se necesita un ejecutable de Lua separado.</p>
+<p>Este libro es la referencia completa de Tandem 0.2. Los capítulos están ordenados para que un lector nuevo aprenda el lenguaje desde el principio y pueda saltar a los capítulos de referencia cuando lo necesite.</p>
+<h2 id="parte-i--primeros-pasos">Parte I — Primeros pasos</h2>
+<ol>
+<li><a href="01-introduction.html">Introducción</a>: qué es Tandem, cómo funciona la compilación y un primer vistazo a la sintaxis.</li>
+<li><a href="02-getting-started.html">Primeros pasos</a>: compila el compilador, ejecuta un primer programa y comprueba un archivo sin ejecutarlo.</li>
+</ol>
+<h2 id="parte-ii--el-lenguaje">Parte II — El lenguaje</h2>
+<ol>
+<li><a href="03-types.html">Tipos</a>: tipos primitivos, tablas, diccionarios, listas, tuplas, structs y módulos.</li>
+<li><a href="04-variables.html">Variables</a>: declaraciones, modificadores <code>local</code> y <code>const</code>, inferencia <code>auto</code> y alcance.</li>
+<li><a href="05-functions.html">Funciones</a>: declaraciones, parámetros, valores por defecto y tipos de retorno.</li>
+<li><a href="06-statements.html">Sentencias</a>: asignación, <code>if</code>, <code>while</code>, <code>for</code>, <code>return</code> y bloques.</li>
+<li><a href="07-expressions.html">Expresiones</a>: operadores, precedencia, importación de la biblioteca estándar y los built-ins <code>print</code> y <code>printf</code>.</li>
+<li><a href="08-comments.html">Comentarios</a>: formas de comentarios estilo C y Lua.</li>
+<li><a href="12-classes.html">Clases</a>: campos tipados, métodos <code>fn</code>, <code>self</code>, constructores, instancias con <code>new</code> y herencia simple.</li>
+</ol>
+<h2 id="parte-iii--herramientas">Parte III — Herramientas</h2>
+<ol>
+<li><a href="09-diagnostics.html">Diagnósticos</a>: errores, advertencias y por qué una sola advertencia bloquea la compilación.</li>
+<li><a href="10-cli.html">Línea de comandos</a>: todos los modos de la CLI, rutas de salida, argumentos y códigos de salida.</li>
+<li><a href="11-rust-api.html">API de Rust</a>: embebe el compilador y el runtime de Lua en un programa Rust.</li>
+</ol>
+<h2 id="parte-iv--estado">Parte IV — Estado</h2>
+<ol>
+<li><a href="13-limitations.html">Limitaciones</a>: lo que Tandem todavía no hace.</li>
+</ol>
+<p>La <a href="../todo.html">lista de tareas del proyecto</a> sigue el trabajo planificado de lenguaje, herramientas y runtime.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../../search.js" defer></script>
+</body>
+</html>

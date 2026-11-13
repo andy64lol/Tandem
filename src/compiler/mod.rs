@@ -75,6 +75,14 @@ pub fn compile(source: &str) -> Result<String, Vec<Diagnostic>> {
 }
 
 pub fn compile_with_dir(source: &str, base: &Path) -> Result<String, Vec<Diagnostic>> {
+    compile_with_dir_named(source, base, "<main>")
+}
+
+pub fn compile_with_dir_named(
+    source: &str,
+    base: &Path,
+    name: &str,
+) -> Result<String, Vec<Diagnostic>> {
     let tokens = lexer::lex(source).map_err(|message| vec![Diagnostic::error(message)])?;
     let program = parser::parse(tokens, source).map_err(|messages| {
         messages
@@ -88,14 +96,14 @@ pub fn compile_with_dir(source: &str, base: &Path) -> Result<String, Vec<Diagnos
 
     let mut errors: Vec<Diagnostic> = Vec::new();
     for (id, module_program) in &loaded.programs {
-        if let Err(message) = checker::check(module_program, &loaded.exports) {
+        if let Err(message) = checker::check_module(module_program, &loaded.exports, id) {
             errors.push(Diagnostic::error(format!("in module '{id}': {message}")));
         }
     }
     if !errors.is_empty() {
         return Err(errors);
     }
-    if let Err(message) = checker::check(&program, &loaded.exports) {
+    if let Err(message) = checker::check_module(&program, &loaded.exports, name) {
         return Err(vec![Diagnostic::error(message)]);
     }
 
@@ -464,7 +472,7 @@ mod tests {
     fn strings_concatenate_with_dot_dot() {
         let lua = compile(r#"str name = "an" .. "dy";"#).unwrap();
         assert!(lua.contains(r#"name = ("an" .. "dy")"#));
-        assert!(error_message("int x = 1 .. 2;").contains("operator .. cannot combine Int and Int"));
+        assert!(error_message("int x = 1 .. 2.0;").contains("operator .. cannot combine Int and Float"));
         assert!(error_message(r#"str s = "a" .. 1;"#)
             .contains("operator .. cannot combine Str and Int"));
     }

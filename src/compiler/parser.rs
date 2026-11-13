@@ -1,7 +1,7 @@
 use crate::compiler::ast::{
     line_column, ClassDef, ClassField, EnumDef, EnumVariant, Expr, Fun, FnType, InterfaceDef,
     MatchArm, MatchExpr, MixinDef, Param, Pattern, Stmt, StmtKind, StructDef, StructField, Top,
-    TraitDef, Ty, UnionDef, UnionVariant, VarDecl,
+    TraitDef, TypeAliasDef, Ty, UnionDef, UnionVariant, VarDecl,
 };
 use std::collections::HashSet;
 
@@ -129,6 +129,11 @@ impl<'a> Parser<'a> {
     fn ty_base(&mut self) -> Result<Ty, String> {
     let token = self.bump();
     let pos = token.pos;
+    if let Tok::Num(text) = &token.kind {
+        if let Ok(value) = text.parse::<i64>() {
+            return Ok(Ty::Const(value));
+        }
+    }
     let n = match token.kind {
         Tok::Ident(name) => name,
         other => {
@@ -290,10 +295,27 @@ impl<'a> Parser<'a> {
     let Some(index) = skip_type(&self.t, self.i) else {
         return false;
     };
-    matches!(
-        self.t.get(index).map(|token| &token.kind),
-        Some(Tok::Ident(_))
-    ) && self.t.get(index + 1).map(|token| &token.kind) == Some(&Tok::Sym("=".into()))
+    // Single name: Type name =
+    if matches!(self.t.get(index).map(|token| &token.kind), Some(Tok::Ident(_)))
+        && self.t.get(index + 1).map(|token| &token.kind) == Some(&Tok::Sym("=".into()))
+    {
+        return true;
+    }
+    // Multiple names: Type name, name, ... =
+    if matches!(self.t.get(index).map(|token| &token.kind), Some(Tok::Ident(_))) {
+        let mut cursor = index + 1;
+        while self.t.get(cursor).map(|token| &token.kind) == Some(&Tok::Sym(",".into())) {
+            cursor += 1;
+            if !matches!(self.t.get(cursor).map(|token| &token.kind), Some(Tok::Ident(_))) {
+                return false;
+            }
+            cursor += 1;
+        }
+        if self.t.get(cursor).map(|token| &token.kind) == Some(&Tok::Sym("=".into())) {
+            return true;
+        }
+    }
+    false
 }
     fn eat_modifier(&mut self, modifier: &str) -> bool {
     if self.eat_kw(modifier) {
@@ -333,6 +355,8 @@ impl<'a> Parser<'a> {
                 })()
             } else if self.eat_kw("struct") {
                 self.struct_def(pos).map(Top::Struct)
+            } else if self.eat_kw("type") {
+                self.type_alias(pos).map(Top::TypeAlias)
             } else if self.kw("abstract") && self.next_is_kw("class") {
                 self.bump();
                 let class_pos = self.cur().pos;
@@ -355,6 +379,16 @@ impl<'a> Parser<'a> {
                 self.union_def(pos).map(Top::Union)
             } else if self.eat_kw("mixin") {
                 self.mixin_def(pos).map(Top::Mixin)
+            } else if self.kw("async") && self.next_is_kw("fn") {
+                self.bump();
+                self.bump();
+                (|| {
+                    let mut function = self.function(pos)?;
+                    function.is_async = true;
+                    Ok(Top::Fun(function))
+                })()
+            } else if self.eat_kw("test") {
+                self.test_block(pos).map(Top::Test)
             } else if self.kw("fn") && !self.next_is_sym("(") {
                 self.bump();
                 self.function(pos).map(Top::Fun)
@@ -418,11 +452,24 @@ impl<'a> Parser<'a> {
         }
         let mut generics = Vec::new();
         loop {
+            let is_const = self.eat_kw("const");
             let param = self.expect_ident()?;
-            if generics.contains(&param) {
+            if is_const {
+                self.expect_sym(":")?;
+                let ty = self.ty()?;
+                if ty != Ty::Int {
+                    return Err(self.err("const generic parameters must have type 'int'".into()));
+                }
+            }
+            let stored = if is_const {
+                format!("const:{param}")
+            } else {
+                param.clone()
+            };
+            if generics.contains(&stored) {
                 return Err(self.err(format!("duplicate generic parameter '{param}'")));
             }
-            generics.push(param);
+            generics.push(stored);
             if !self.eat_sym(",") {
                 break;
             }
@@ -467,6 +514,8 @@ impl<'a> Parser<'a> {
                 is_final: false,
                 is_getter: false,
                 is_setter: false,
+                is_async: false,
+                trait_default: None,
                 body,
             })
         })();
@@ -648,12 +697,14 @@ fn class_def_body(
     let mut constructor = None;
     let mut methods = Vec::new();
     let mut mixins = Vec::new();
+    let mut friends = Vec::new();
     while !self.sym("}") && !matches!(self.cur().kind, Tok::Eof) {
         let member_pos = self.cur().pos;
         let (mut is_static, mut is_private) = (false, false);
         let mut is_protected = false;
         let mut member_abstract = false;
         let mut member_final = false;
+        let mut member_async = false;
         loop {
             if self.eat_kw("static") {
                 is_static = true;
@@ -665,9 +716,21 @@ fn class_def_body(
                 member_abstract = true;
             } else if self.eat_kw("final") {
                 member_final = true;
+            } else if self.eat_kw("async") {
+                member_async = true;
             } else {
                 break;
             }
+        }
+        if self.eat_kw("friend") {
+            let friend = match self.cur().kind.clone() {
+                Tok::Str(value) => { self.bump(); value }
+                Tok::Ident(value) => { self.bump(); value }
+                _ => return Err(self.err("expected a module name after 'friend'".into())),
+            };
+            self.expect_sym(";")?;
+            friends.push(friend);
+            continue;
         }
         if self.eat_kw("use") {
             if is_static || is_private || is_protected {
@@ -721,6 +784,8 @@ fn class_def_body(
                 is_final: member_final,
                 is_getter,
                 is_setter: !is_getter,
+                is_async: false,
+                trait_default: None,
                 body,
             });
             continue;
@@ -760,6 +825,8 @@ fn class_def_body(
                 is_final: false,
                 is_getter: false,
                 is_setter: false,
+                is_async: false,
+                trait_default: None,
                 body,
             });
         } else if self.eat_kw("fn") {
@@ -832,6 +899,8 @@ fn class_def_body(
                     is_final: false,
                     is_getter: false,
                     is_setter: false,
+                    is_async: false,
+                    trait_default: None,
                     body,
                 });
                 continue;
@@ -892,6 +961,8 @@ fn class_def_body(
                 is_final: member_final,
                 is_getter: false,
                 is_setter: false,
+                is_async: member_async,
+                trait_default: None,
                 body,
             });
         } else {
@@ -941,6 +1012,7 @@ fn class_def_body(
         fields,
         constructor,
         methods,
+        friends,
         is_abstract,
         is_final,
     })
@@ -984,6 +1056,8 @@ fn interface_def(&mut self, pos: usize) -> Result<InterfaceDef, String> {
             is_final: false,
             is_getter: false,
             is_setter: false,
+            is_async: false,
+            trait_default: None,
             body: Vec::new(),
         });
     }
@@ -1110,6 +1184,8 @@ fn mixin_def(&mut self, pos: usize) -> Result<MixinDef, String> {
                 is_final: false,
                 is_getter: false,
                 is_setter: false,
+                is_async: false,
+                trait_default: None,
                 body,
             });
             continue;
@@ -1191,6 +1267,8 @@ fn trait_def(&mut self, pos: usize) -> Result<TraitDef, String> {
             is_final: false,
             is_getter: false,
             is_setter: false,
+            is_async: false,
+            trait_default: None,
             body,
         });
     }
@@ -1203,6 +1281,26 @@ fn trait_def(&mut self, pos: usize) -> Result<TraitDef, String> {
         column,
         methods,
     })
+}
+
+fn test_block(&mut self, pos: usize) -> Result<crate::compiler::ast::TestBlock, String> {
+    let name = match self.cur().kind.clone() {
+        Tok::Str(value) => { self.bump(); value }
+        Tok::Ident(value) => { self.bump(); value }
+        _ => return Err(self.err("expected a test name after 'test'".into())),
+    };
+    let body = self.block()?;
+    let (line, column) = line_column(self.source, pos);
+    Ok(crate::compiler::ast::TestBlock { name, line, column, body })
+}
+
+fn type_alias(&mut self, pos: usize) -> Result<TypeAliasDef, String> {
+    let name = self.expect_ident()?;
+    self.expect_sym("=")?;
+    let ty = self.ty()?;
+    self.expect_sym(";")?;
+    let (line, column) = line_column(self.source, pos);
+    Ok(TypeAliasDef { name, ty, line, column })
 }
 
 fn struct_def(&mut self, pos: usize) -> Result<StructDef, String> {
@@ -1299,6 +1397,10 @@ fn stmt(&mut self) -> Result<Stmt, String> {
     if self.kw("class") {
         self.bump();
         return self.class_instance_declaration(false, false, pos);
+    }
+    if self.eat_kw("defer") {
+        let inner = self.stmt()?;
+        return Ok(self.make_stmt(pos, StmtKind::Defer(Box::new(inner))));
     }
     if self.sym("{") {
         let body = self.block()?;
@@ -1443,14 +1545,24 @@ fn declaration_after_type(
     if ty == Ty::Void {
         return Err(self.err("variables cannot have type 'void'".into()));
     }
-    let name = self.expect_ident()?;
-    if name == "this" || name == "self" || name == "super" {
+    let mut names = vec![self.expect_ident()?];
+    if names[0] == "this" || names[0] == "self" || names[0] == "super" {
         return Err(self.err(format!(
-            "'{name}' is reserved and cannot be a variable name"
+            "'{}' is reserved and cannot be a variable name",
+            names[0]
         )));
     }
+    while self.eat_sym(",") {
+        let next = self.expect_ident()?;
+        if next == "this" || next == "self" || next == "super" {
+            return Err(self.err(format!(
+                "'{next}' is reserved and cannot be a variable name"
+            )));
+        }
+        names.push(next);
+    }
     self.expect_sym("=")?;
-    let value = if matches!(ty, Ty::Tuple(_) | Ty::Auto) && self.sym("(") {
+    let value = if self.sym("(") {
         self.tuple_literal()?
     } else {
         self.expr(0)?
@@ -1475,16 +1587,32 @@ fn declaration_after_type(
     } else {
         ty
     };
-    Ok(self.make_stmt(
-        pos,
-        StmtKind::Decl(VarDecl {
-            ty,
-            name,
-            value,
-            is_const,
-            is_local,
-        }),
-    ))
+    if names.len() == 1 {
+        Ok(self.make_stmt(
+            pos,
+            StmtKind::Decl(VarDecl {
+                ty,
+                name: names.into_iter().next().unwrap(),
+                value,
+                is_const,
+                is_local,
+            }),
+        ))
+    } else {
+        // Destructuring declaration: int a, b = (1, 2);
+        let mut decls = Vec::new();
+        for (idx, name) in names.iter().enumerate() {
+            let index_expr = Expr::Index(Box::new(value.clone()), Box::new(Expr::Int((idx + 1) as i64)));
+            decls.push(VarDecl {
+                ty: ty.clone(),
+                name: name.clone(),
+                value: index_expr,
+                is_const,
+                is_local,
+            });
+        }
+        Ok(self.make_stmt(pos, StmtKind::MultiDecl(decls)))
+    }
 }
 fn prec(op: &str) -> Option<u8> {
     Some(match op {
@@ -1500,7 +1628,10 @@ fn prec(op: &str) -> Option<u8> {
     })
 }
 fn expr(&mut self, min: u8) -> Result<Expr, String> {
-    let mut lhs = if self.eat_sym("!") {
+    let mut lhs = if self.kw("await") {
+        self.bump();
+        Expr::Await(Box::new(self.expr(7)?))
+    } else if self.eat_sym("!") {
         Expr::Unary("!".into(), Box::new(self.expr(7)?))
     } else if self.eat_sym("-") {
         Expr::Unary("-".into(), Box::new(self.expr(7)?))
@@ -1536,7 +1667,11 @@ fn call_args(&mut self) -> Result<Vec<Expr>, String> {
     let mut a = vec![];
     if !self.sym(")") {
         loop {
-            a.push(self.expr(1)?);
+            if self.eat_sym("...") {
+                a.push(Expr::Spread(Box::new(self.expr(1)?)));
+            } else {
+                a.push(self.expr(1)?);
+            }
             if !self.eat_sym(",") {
                 break;
             }
@@ -1610,7 +1745,10 @@ fn atom(&mut self) -> Result<Expr, String> {
         }
         Tok::Str(s) => {
             self.bump();
-            Ok(Expr::Str(s))
+            if !s.contains("${") {
+                return Ok(Expr::Str(s));
+            }
+            self.parse_interpolated_string(&s)
         }
         Tok::Ident(s) if s == "true" => {
             self.bump();
@@ -1623,6 +1761,13 @@ fn atom(&mut self) -> Result<Expr, String> {
         Tok::Ident(s) if s == "null" => {
             self.bump();
             Ok(Expr::Null)
+        }
+        Tok::Ident(s) if s == "comptime" => {
+            self.bump();
+            self.expect_sym("(")?;
+            let value = self.expr(0)?;
+            self.expect_sym(")")?;
+            Ok(Expr::Comptime(Box::new(value)))
         }
         Tok::Ident(s) if s == "match" => {
             self.bump();
@@ -1653,6 +1798,8 @@ fn atom(&mut self) -> Result<Expr, String> {
                 is_final: false,
                 is_getter: false,
                 is_setter: false,
+                is_async: false,
+                trait_default: None,
                 body,
             })))
         }
@@ -1779,6 +1926,77 @@ fn atom(&mut self) -> Result<Expr, String> {
         let expr = self.expr(1)?;
         Ok(Pattern::Literal(expr))
     }
+    fn parse_interpolated_string(&mut self, s: &str) -> Result<Expr, String> {
+        let chars: Vec<char> = s.chars().collect();
+        let mut parts: Vec<Expr> = Vec::new();
+        let mut current = String::new();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '$' && i + 1 < chars.len() && chars[i + 1] == '{' {
+                // find matching }
+                let mut depth = 0;
+                let start = i + 2;
+                let mut j = start;
+                while j < chars.len() {
+                    if chars[j] == '{' {
+                        depth += 1;
+                    } else if chars[j] == '}' {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    j += 1;
+                }
+                if j >= chars.len() {
+                    return Err(self.err("unclosed '${' in string".into()));
+                }
+                let expr_str: String = chars[start..j].iter().collect();
+                if !current.is_empty() {
+                    parts.push(Expr::Str(current.clone()));
+                    current.clear();
+                }
+                // Parse the expression using a sub-parser.
+                let tokens = crate::compiler::lexer::lex(&expr_str)
+                    .map_err(|e| self.err(format!("in string interpolation: {e}")))?;
+                let mut sub = Parser {
+                    t: tokens,
+                    i: 0,
+                    source: &expr_str,
+                    errors: Vec::new(),
+                    generic_types: Vec::new(),
+                    pending: Vec::new(),
+                    anonymous_classes: 0,
+                };
+                let expr = sub.expr(0)?;
+                if !sub.errors.is_empty() {
+                    return Err(self.err(sub.errors.join("; ")));
+                }
+                parts.push(expr);
+                i = j + 1;
+                continue;
+            } else {
+                current.push(chars[i]);
+                i += 1;
+            }
+        }
+        if !current.is_empty() {
+            parts.push(Expr::Str(current));
+        }
+        if parts.is_empty() {
+            return Ok(Expr::Str(String::new()));
+        }
+        let mut result = parts.remove(0);
+        for part in parts {
+            let part = match &part {
+                Expr::Str(_) => part,
+                _ => Expr::Call("tostring".to_string(), vec![part]),
+            };
+            result = Expr::Bin(Box::new(result), "..".to_string(), Box::new(part));
+        }
+        Ok(result)
+    }
+
 fn list_values(&mut self) -> Result<Expr, String> {    let mut values = Vec::new();
     if !self.sym("]") {
         loop {
@@ -1995,6 +2213,9 @@ fn resolve_named_types(program: &mut [Top]) {
             }
             Expr::Unwrap(value) => resolve_expr(value, enums, unions),
             Expr::InstanceOf(value, _) => resolve_expr(value, enums, unions),
+            Expr::Spread(value) => resolve_expr(value, enums, unions),
+            Expr::Await(value) => resolve_expr(value, enums, unions),
+            Expr::Comptime(value) => resolve_expr(value, enums, unions),
             Expr::Match(expression) => {
                 resolve_expr(&mut expression.subject, enums, unions);
                 for arm in &mut expression.arms {
@@ -2006,6 +2227,12 @@ fn resolve_named_types(program: &mut [Top]) {
 
     fn resolve_stmt(stmt: &mut Stmt, enums: &HashSet<String>, unions: &HashSet<String>) {
         match &mut stmt.kind {
+            StmtKind::Defer(inner) => resolve_stmt(inner, enums, unions),
+            StmtKind::MultiDecl(decls) => {
+                for decl in decls {
+                    resolve(&mut decl.ty, enums, unions);
+                }
+            }
             StmtKind::Decl(decl) => {
                 resolve(&mut decl.ty, enums, unions);
                 resolve_expr(&mut decl.value, enums, unions);
@@ -2065,6 +2292,11 @@ fn resolve_named_types(program: &mut [Top]) {
 
     for top in program.iter_mut() {
         match top {
+            Top::Test(test) => {
+                for statement in &mut test.body {
+                    resolve_stmt(statement, &enums, &unions);
+                }
+            }
             Top::Fun(function) => {
                 resolve_callable(function, &enums, &unions);
                 for statement in &mut function.body {
@@ -2108,6 +2340,7 @@ fn resolve_named_types(program: &mut [Top]) {
                 }
             }
             Top::Enum(_) => {}
+            Top::TypeAlias(_) => {}
             Top::Union(definition) => {
                 for variant in &mut definition.variants {
                     if let Some(payload) = &mut variant.payload {
@@ -2124,6 +2357,51 @@ fn resolve_named_types(program: &mut [Top]) {
                 }
             }
             Top::Import { .. } => {}
+        }
+    }
+}
+
+/// Resolves type alias references into their underlying types.
+fn resolve_type_aliases(program: &mut [Top]) {
+    let mut aliases = std::collections::HashMap::new();
+    for top in program.iter() {
+        if let Top::TypeAlias(alias) = top {
+            aliases.insert(alias.name.clone(), alias.ty.clone());
+        }
+    }
+    if aliases.is_empty() { return; }
+    fn resolve(ty: &mut Ty, aliases: &std::collections::HashMap<String, Ty>) {
+        match ty {
+            Ty::Struct(name) => { if let Some(a) = aliases.get(name) { *ty = a.clone(); } }
+            Ty::List(e) => resolve(e, aliases),
+            Ty::Map(k, v) => { resolve(k, aliases); resolve(v, aliases); }
+            Ty::Tuple(Some(es)) => { for e in es { resolve(e, aliases); } }
+            Ty::Applied(_, args) => { for a in args { resolve(a, aliases); } }
+            Ty::Optional(i) => resolve(i, aliases),
+            _ => {}
+        }
+    }
+    for top in program.iter_mut() {
+        match top {
+            Top::Stmt(statement) => {
+                // inline resolve for statements
+                if let StmtKind::Decl(decl) = &mut statement.kind {
+                    resolve(&mut decl.ty, &aliases);
+                }
+            }
+            Top::Fun(f) => { for p in &mut f.params { resolve(&mut p.ty, &aliases); } resolve(&mut f.ret, &aliases); }
+            Top::Struct(d) => { for f in &mut d.fields { resolve(&mut f.ty, &aliases); } }
+            Top::TypeAlias(a) => resolve(&mut a.ty, &aliases),
+            Top::Interface(d) => { for m in &mut d.methods { for p in &mut m.params { resolve(&mut p.ty, &aliases); } resolve(&mut m.ret, &aliases); } }
+            Top::Trait(d) => { for m in &mut d.methods { for p in &mut m.params { resolve(&mut p.ty, &aliases); } resolve(&mut m.ret, &aliases); } }
+            Top::Class(d) => {
+                for f in &mut d.fields { resolve(&mut f.ty, &aliases); }
+                for m in &mut d.methods { for p in &mut m.params { resolve(&mut p.ty, &aliases); } resolve(&mut m.ret, &aliases); }
+                if let Some(c) = &mut d.constructor { for p in &mut c.params { resolve(&mut p.ty, &aliases); } }
+            }
+            Top::Union(d) => { for v in &mut d.variants { if let Some(p) = &mut v.payload { resolve(p, &aliases); } } }
+            Top::Mixin(d) => { for f in &mut d.fields { resolve(&mut f.ty, &aliases); } for m in &mut d.methods { for p in &mut m.params { resolve(&mut p.ty, &aliases); } resolve(&mut m.ret, &aliases); } }
+            _ => {}
         }
     }
 }
@@ -2161,9 +2439,13 @@ fn expand_program(program: &mut [Top]) {
             collect_defaults(traits, parent, collected, visited);
         }
         for method in &trait_def.methods {
-            if !method.body.is_empty() && !collected.iter().any(|m| m.name == method.name) {
-                collected.push(method.clone());
+            if method.body.is_empty() {
+                continue;
             }
+            collected.retain(|existing| existing.name != method.name);
+            let mut method = method.clone();
+            method.trait_default = Some(name.to_owned());
+            collected.push(method);
         }
     }
 
@@ -2215,6 +2497,7 @@ pub(crate) fn parse(tokens: Vec<Token>, source: &str) -> Result<Vec<Top>, Vec<St
     program.extend(parser.pending.drain(..));
     expand_program(&mut program);
     resolve_named_types(&mut program);
+    resolve_type_aliases(&mut program);
     if parser.errors.is_empty() {
         Ok(program)
     } else {

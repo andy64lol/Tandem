@@ -105,7 +105,71 @@ pub fn format_source(source: &str) -> Result<String, String> {
     let items = collect_items(source, &tokens);
     let mut printer = Printer::new();
     printer.print(&items);
-    Ok(printer.finish())
+    Ok(align_trailing_comments(printer.finish()))
+}
+
+/// Finds the byte offset of a trailing line comment, ignoring strings.
+fn trailing_comment(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    let mut quote: Option<u8> = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active) = quote {
+            if byte == b'\\' {
+                index += 2;
+                continue;
+            }
+            if byte == active {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'"' | b'\'' => quote = Some(byte),
+            b'/' if bytes.get(index + 1) == Some(&b'/') => return Some(index),
+            b'-' if bytes.get(index + 1) == Some(&b'-') => return Some(index),
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Aligns runs of consecutive trailing comments to a common column.
+fn align_trailing_comments(mut output: String) -> String {
+    let mut lines: Vec<String> = output.lines().map(str::to_string).collect();
+    let mut index = 0;
+    while index < lines.len() {
+        if trailing_comment(&lines[index]).is_none() {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < lines.len() && trailing_comment(&lines[index]).is_some() {
+            index += 1;
+        }
+        if index - start < 2 {
+            continue;
+        }
+        let width = (start..index)
+            .filter_map(|line| trailing_comment(&lines[line]).map(|column| lines[line][..column].trim_end().len()))
+            .max()
+            .unwrap_or(0);
+        for line in &mut lines[start..index] {
+            if let Some(column) = trailing_comment(line) {
+                let code = line[..column].trim_end().to_string();
+                let comment = line[column..].to_string();
+                *line = format!("{code}{}{comment}", " ".repeat(width - code.len() + 1));
+            }
+        }
+    }
+    output = lines.join("\n");
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output
 }
 
 /// Maps byte offsets to 1-based line numbers.

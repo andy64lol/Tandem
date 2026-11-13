@@ -102,6 +102,8 @@ struct ClassInfo {
     private_methods: HashSet<String>,
     protected_fields: HashSet<String>,
     protected_methods: HashSet<String>,
+    friends: HashSet<String>,
+    constructor_is_protected: bool,
     abstract_methods: HashSet<String>,
     final_methods: HashSet<String>,
     is_abstract: bool,
@@ -129,6 +131,8 @@ struct Checker {
     current_static: bool,
     allow_super_call: bool,
     position: Option<(usize, usize)>,
+    current_module: String,
+    current_trait: Option<String>,
 }
 impl Checker {
     fn new(
@@ -142,6 +146,7 @@ impl Checker {
         unions: HashMap<String, UnionInfo>,
         unstable_globals: HashSet<String>,
         imports: HashSet<String>,
+        current_module: String,
     ) -> Self {
         Self {
             scopes: vec![HashMap::new()],
@@ -162,6 +167,8 @@ impl Checker {
             current_static: false,
             allow_super_call: false,
             position: None,
+            current_module,
+            current_trait: None,
         }
     }
     fn at(&self, message: String) -> String {
@@ -260,6 +267,9 @@ impl Checker {
         let ret = substitute_type(&signature.ret, &generic_bindings);
         if mentions_unbound_generic(&ret, &signature.generic, &generic_bindings) {
             return Err(format!("cannot infer generic return type for '{label}'"));
+        }
+        if signature.is_async {
+            return Ok(Ty::Applied("Future".into(), vec![ret]));
         }
         Ok(ret)
     }
@@ -396,6 +406,8 @@ impl Checker {
                             private_methods: HashSet::new(),
                             protected_fields: HashSet::new(),
                             protected_methods: HashSet::new(),
+                            friends: HashSet::new(),
+                            constructor_is_protected: false,
                             abstract_methods: HashSet::new(),
                             final_methods: HashSet::new(),
                             is_abstract: false,
@@ -743,7 +755,15 @@ impl Checker {
         find(&self.classes, class_name, member, &mut HashSet::new())
     }
     fn member_accessible(&self, class_name: &str) -> bool {
-        self.current_class.as_deref() == Some(class_name)
+        if self.current_class.as_deref() == Some(class_name) {
+            return true;
+        }
+        self.classes.get(class_name).is_some_and(|class| {
+            class.friends.iter().any(|friend| {
+                friend == &self.current_module
+                    || module_basename(friend) == module_basename(&self.current_module)
+            })
+        })
     }
     fn protected_member_owner(&self, class_name: &str, member: &str) -> Option<String> {
         fn find(
@@ -1041,6 +1061,8 @@ impl Checker {
                             private_methods: HashSet::new(),
                             protected_fields: HashSet::new(),
                             protected_methods: HashSet::new(),
+                            friends: HashSet::new(),
+                            constructor_is_protected: false,
                             abstract_methods: HashSet::new(),
                             final_methods: HashSet::new(),
                             is_abstract: false,
@@ -1077,6 +1099,12 @@ impl Checker {
         };
         if class.is_abstract {
             return Err(format!("cannot instantiate abstract class '{name}'"));
+        }
+        if class.constructor_is_protected && !self.protected_accessible(name)
+        {
+            return Err(format!(
+                "constructor of class '{name}' is protected"
+            ));
         }
         if class.generic.len() != type_args.len() {
             let expected = class.generic.len();
@@ -1131,10 +1159,15 @@ impl Checker {
     }
     fn field_type(&self, name: &str) -> Option<Ty> {
         let class = self.current_class.as_ref()?;
-        self.classes
-            .get(class)
-            .and_then(|class| class.fields.get(name))
-            .cloned()
+        let info = self.classes.get(class)?;
+        if info
+            .generic
+            .iter()
+            .any(|param| param == &format!("const:{name}"))
+        {
+            return Some(Ty::Int);
+        }
+        info.fields.get(name).cloned()
     }
     fn implicit_field(&self, name: &str) -> Option<Ty> {
         if self.current_static {
@@ -1328,11 +1361,15 @@ impl Checker {
             }
             Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Var(_) => false,
             Expr::Null => false,
+            Expr::Spread(value) => Self::contains_cast(value),
+            Expr::Await(value) => Self::contains_cast(value),
+            Expr::Comptime(value) => Self::contains_cast(value),
         }
     }
     fn contains_cast_statement(statement: &Stmt) -> bool {
         match &statement.kind {
             StmtKind::Decl(decl) => Self::contains_cast(&decl.value),
+            StmtKind::MultiDecl(decls) => decls.iter().any(|d| Self::contains_cast(&d.value)),
             StmtKind::Assign(_, _, value) => Self::contains_cast(value),
             StmtKind::AssignMember(base, _, _, value) => {
                 Self::contains_cast(base) || Self::contains_cast(value)
@@ -1367,6 +1404,7 @@ impl Checker {
             StmtKind::Return(value) => {
                 value.as_ref().is_some_and(|value| Self::contains_cast(value))
             }
+            StmtKind::Defer(inner) => Self::contains_cast_statement(inner),
         }
     }
     fn check_list_replacement(&mut self, expr: &Expr, element_ty: &Ty) -> Result<Ty, String> {
@@ -1708,6 +1746,7 @@ impl Checker {
                     }
                     "+" if x == Ty::Str && y == Ty::Str => Ok(Ty::Str),
                     "," if x == Ty::Str && y == Ty::Str => Ok(Ty::Str),
+                    ".." if x == Ty::Int && y == Ty::Int => Ok(Ty::List(Box::new(Ty::Int))),
                     ".." if x == Ty::Str && y == Ty::Str => Ok(Ty::Str),
                     "==" | "!=" if x == y && x != Ty::Void => Ok(Ty::Bool),
                     "==" | "!="
@@ -1754,6 +1793,16 @@ impl Checker {
             Expr::MethodCall(base, name, args) => self.method_return(base, name, args),
             Expr::Index(base, index) => {
                 let base_ty = self.expr(base)?;
+                if let Expr::Bin(start, op, stop) = index.as_ref() {
+                    if op == ".." {
+                        let start_ty = self.expr(start)?;
+                        let stop_ty = self.expr(stop)?;
+                        if start_ty != Ty::Int || stop_ty != Ty::Int {
+                            return Err(format!("slice bounds must be int"));
+                        }
+                        return Ok(base_ty);
+                    }
+                }
                 let index_ty = self.expr(index)?;
                 if let Some(shape) = self.table_shape_of(base) {
                     match (index.as_ref(), &index_ty) {
@@ -1862,6 +1911,27 @@ impl Checker {
                 }
                 Ok(Ty::Tuple(Some(types)))
             }
+            Expr::Spread(value) => {
+                let ty = self.expr(value)?;
+                Ok(ty)
+            }
+            Expr::Comptime(value) => {
+                if crate::compiler::ast::eval_const(value).is_none() {
+                    return Err("comptime expression is not a compile-time constant".into());
+                }
+                self.expr(value)
+            }
+            Expr::Await(value) => {
+                let ty = self.expr(value)?;
+                match ty {
+                    Ty::Applied(name, args) if name == "Future" && args.len() == 1 => {
+                        Ok(args[0].clone())
+                    }
+                    other => Err(format!(
+                        "'await' needs an async value, got {other:?}"
+                    )),
+                }
+            }
             Expr::New(name, args) => self.check_new(name, &[], args, false),
             Expr::NewTyped(name, type_args, args) => self.check_new(name, type_args, args, true),
             Expr::Lambda(function) => {
@@ -1880,6 +1950,7 @@ impl Checker {
                     ret: signature.ret,
                     varargs: false,
                     generic: Vec::new(),
+                    is_async: false,
                 };
                 self.check_signature_call("function value", &signature, args)
             }
@@ -1992,6 +2063,18 @@ impl Checker {
                 Ok(Ty::Void)
             }
             Expr::SuperMethod(name, args) => {
+                if let Some(trait_name) = self.current_trait.clone() {
+                    let Some(signature) = self.trait_method_signature(&trait_name, name) else {
+                        return Err(format!(
+                            "trait '{trait_name}' has no parent default method '{name}'"
+                        ));
+                    };
+                    return self.check_signature_call(
+                        &format!("{trait_name}.super.{name}"),
+                        &signature,
+                        args,
+                    );
+                }
                 let Some(class_name) = self.current_class.clone() else {
                     return Err(format!(
                         "'super.{name}(...)' can only be used inside a class"
@@ -2049,6 +2132,13 @@ impl Checker {
                     return Ok(Ty::Void);
                 }
                 if let Some(f) = self.funcs.get(n).cloned() {
+                    // Spread arguments bypass the arity check.
+                    if args.iter().any(|a| matches!(a, Expr::Spread(_))) {
+                        for arg in args {
+                            self.expr(arg)?;
+                        }
+                        return Ok(f.ret.clone());
+                    }
                     return self.check_signature_call(n, &f, args);
                 }
                 if let Some(binding) = self.lookup(n) {
@@ -2060,6 +2150,7 @@ impl Checker {
                             ret: signature.ret,
                             varargs: false,
                             generic: Vec::new(),
+                            is_async: false,
                         };
                         return self.check_signature_call(n, &signature, args);
                     }
@@ -2077,6 +2168,7 @@ impl Checker {
                             ret: signature.ret.clone(),
                             varargs: signature.varargs,
                             generic: Vec::new(),
+                            is_async: false,
                         };
                         return self.check_signature_call(n, &signature, args);
                     }
@@ -2200,6 +2292,28 @@ impl Checker {
         let _ = left;
         Ok(Some(result))
     }
+    fn trait_method_signature(&self, trait_name: &str, method: &str) -> Option<FnSig> {
+        fn find(
+            traits: &HashMap<String, TraitDef>,
+            trait_name: &str,
+            method: &str,
+            visited: &mut HashSet<String>,
+        ) -> Option<FnSig> {
+            if !visited.insert(trait_name.to_owned()) {
+                return None;
+            }
+            let definition = traits.get(trait_name)?;
+            if let Some(method) = definition.methods.iter().find(|m| m.name == method) {
+                return Some(signature(&method.params, method.ret.clone()));
+            }
+            definition
+                .parents
+                .iter()
+                .find_map(|parent| find(traits, parent, method, visited))
+        }
+        find(&self.traits, trait_name, method, &mut HashSet::new())
+    }
+
     fn match_expression(&mut self, expression: &MatchExpr) -> Result<Ty, String> {
         let subject_ty = self.expr(&expression.subject)?;
         let mut result: Option<Ty> = None;
@@ -2306,6 +2420,18 @@ impl Checker {
     }
     fn stmt_inner(&mut self, s: &Stmt, ret: &Ty) -> Result<(), String> {
         match &s.kind {
+            StmtKind::MultiDecl(decls) => {
+                for decl in decls {
+                    if self.current_binding(&decl.name).is_some() {
+                        self.check_redefinition(decl)?;
+                    } else {
+                        // simplified: declare each
+                        let got = self.expr_as(&decl.value, &decl.ty)?;
+                        self.declare(&decl.name, got, !decl.is_const)?;
+                    }
+                }
+                return Ok(());
+            }
             StmtKind::Decl(decl) => {
                 if self.current_binding(&decl.name).is_some() {
                     return self.check_redefinition(decl);
@@ -2683,6 +2809,10 @@ impl Checker {
                 self.merge_types(&before, &after);
                 Ok(())
             }
+            StmtKind::Defer(inner) => {
+                self.stmt(inner, ret)?;
+                Ok(())
+            }
             StmtKind::Return(e) => match (e, ret) {
                 (None, Ty::Void) => Ok(()),
                 (Some(x), r) if self.expr_as(x, r)? == *r => Ok(()),
@@ -2706,6 +2836,8 @@ fn check_callable(
     let previous_constructor = c.current_constructor;
     let previous_static = c.current_static;
     let previous_super_call = c.allow_super_call;
+    let previous_trait = c.current_trait.clone();
+    c.current_trait = function.trait_default.clone();
     c.current_class = class.map(str::to_string);
     c.current_constructor = constructor;
     c.current_static = function.is_static;
@@ -2765,6 +2897,7 @@ fn check_callable(
     c.current_constructor = previous_constructor;
     c.current_static = previous_static;
     c.allow_super_call = previous_super_call;
+    c.current_trait = previous_trait;
     Ok(())
 }
 
@@ -2816,6 +2949,7 @@ fn signature_generic(params: &[Param], ret: Ty, generic: Vec<String>) -> FnSig {
         ret,
         varargs: false,
         generic,
+        is_async: false,
     }
 }
 
@@ -2826,6 +2960,7 @@ fn empty_signature() -> FnSig {
         ret: Ty::Void,
         varargs: false,
         generic: Vec::new(),
+        is_async: false,
     }
 }
 
@@ -2980,11 +3115,12 @@ fn collect_classes(program: &[Top]) -> Result<Classes, String> {
                         }
                     }
                     member_kinds.insert(method.name.clone(), kind);
-                    let method_signature = signature_generic(
+                    let mut method_signature = signature_generic(
                         &method.params,
                         method.ret.clone(),
                         method.generic.clone(),
                     );
+                    method_signature.is_async = method.is_async;
                     if method.is_private {
                         private_methods.insert(method.name.clone());
                     }
@@ -3032,6 +3168,11 @@ fn collect_classes(program: &[Top]) -> Result<Classes, String> {
                             private_methods,
                             protected_fields,
                             protected_methods,
+                            friends: definition.friends.iter().cloned().collect(),
+                            constructor_is_protected: definition
+                                .constructor
+                                .as_ref()
+                                .is_some_and(|constructor| constructor.is_protected),
                             abstract_methods,
                             final_methods,
                             is_abstract,
@@ -3568,9 +3709,24 @@ fn validate_program_types(
                         validate_type(&decl.ty, structs, classes, interfaces, enums, unions)
                     }
                 }
+                StmtKind::MultiDecl(decls) => {
+                    for decl in decls {
+                        validate_type(&decl.ty, structs, classes, interfaces, enums, unions)?;
+                    }
+                    Ok(())
+                }
                 StmtKind::Block(body) | StmtKind::While(_, body) => {
                     validate_stmts(body, structs, classes, interfaces, enums, unions)
                 }
+                StmtKind::Defer(inner) => validate_stmts(
+                    std::slice::from_ref(inner),
+                    structs,
+                    classes,
+                    interfaces,
+                    enums,
+                    unions,
+                ),
+
                 StmtKind::If(_, yes, no) => {
                     validate_stmts(yes, structs, classes, interfaces, enums, unions)?;
                     validate_stmts(no, structs, classes, interfaces, enums, unions)
@@ -3592,6 +3748,9 @@ fn validate_program_types(
 
     for top in program {
         match top {
+            Top::Test(test) => {
+                validate_stmts(&test.body, structs, classes, interfaces, enums, unions)?;
+            }
             Top::Fun(function) => {
                 let result = (|| {
                     validate_type(&function.ret, structs, classes, interfaces, enums, unions)?;
@@ -3667,7 +3826,7 @@ fn validate_program_types(
                     )
                 })?;
             }
-            Top::Enum(_) | Top::Union(_) | Top::Mixin(_) => {}
+            Top::Enum(_) | Top::Union(_) | Top::Mixin(_) | Top::TypeAlias(_) => {}
             Top::Import { .. } => {}
         }
     }
@@ -3711,9 +3870,10 @@ fn collect_imports(program: &[Top]) -> Result<HashSet<String>, String> {
     Ok(imports)
 }
 
-pub(crate) fn check(
+pub(crate) fn check_module(
     program: &[Top],
     modules: &HashMap<String, ModuleExports>,
+    module_id: &str,
 ) -> Result<(), String> {
     let types = collect_types(program).map_err(|e| e)?;
     validate_program_types(
@@ -3737,6 +3897,7 @@ pub(crate) fn check(
         types.unions,
         unstable_globals,
         imports.clone(),
+        module_id.to_owned(),
     );
     c.funcs.insert(
         "print".into(),
@@ -3746,6 +3907,7 @@ pub(crate) fn check(
             ret: Ty::Void,
             varargs: true,
             generic: Vec::new(),
+            is_async: false,
         },
     );
     c.funcs.insert(
@@ -3756,6 +3918,7 @@ pub(crate) fn check(
             ret: Ty::Void,
             varargs: false,
             generic: Vec::new(),
+            is_async: false,
         },
     );
     for package in &imports {
@@ -3774,6 +3937,7 @@ pub(crate) fn check(
                     ret: signature.ret.clone(),
                     varargs: signature.varargs,
                     generic: Vec::new(),
+                    is_async: false,
                 }),
             );
         }
@@ -3856,6 +4020,7 @@ pub(crate) fn check(
                         ret: f.ret.clone(),
                         varargs: false,
                         generic: f.generic.clone(),
+                        is_async: f.is_async,
                     },
                 );
             }
@@ -3906,6 +4071,12 @@ pub(crate) fn check(
         let mut checked_globals = HashSet::new();
         for t in program {
             match t {
+                Top::Test(test) => {
+                    for statement in &test.body {
+                        c.position = Some((statement.line, statement.column));
+                        c.stmt(statement, &Ty::Void)?;
+                    }
+                }
                 Top::Stmt(Stmt {
                     kind: StmtKind::Decl(decl),
                     line,
@@ -3976,7 +4147,8 @@ pub(crate) fn check(
                 | Top::Trait(_)
                 | Top::Enum(_)
                 | Top::Union(_)
-                | Top::Mixin(_) => {}
+                | Top::Mixin(_)
+                | Top::TypeAlias(_) => {}
                 Top::Import { .. } => {}
             }
         }
