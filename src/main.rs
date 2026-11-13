@@ -58,7 +58,7 @@ fn fail(message: impl std::fmt::Display) -> ! {
 
 fn usage() -> ! {
     eprintln!(
-        "Usage: tandem [--memory-limit <bytes>] [--instruction-limit <count>] <input.tdm|script.lua> [output.lua or script arguments...]\n       tandem [--memory-limit <bytes>] [--instruction-limit <count>] --check <input.tdm>\n       tandem --version\n       tandem fmt <input.tdm>\n       tandem repl\n       tandem lsp\n       tandem pkg install [project-dir]"
+        "Usage: tandem [--memory-limit <bytes>] [--instruction-limit <count>] <input.tdm|script.lua> [output.lua or script arguments...]\n       tandem [--memory-limit <bytes>] [--instruction-limit <count>] --check <input.tdm>\n       tandem --version\n       tandem fmt <input.tdm>\n       tandem repl\n       tandem lsp\n       tandem new <name>\n       tandem build\n       tandem run\n       tandem pkg install [project-dir]"
     );
     process::exit(2)
 }
@@ -167,6 +167,92 @@ fn main() {
             usage();
         }
         tandem::lsp::serve();
+        return;
+    }
+
+    if args[0] == "new" {
+        if args.len() != 2 {
+            usage();
+        }
+        let path_arg = &args[1];
+        let root = Path::new(path_arg);
+        let name = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path_arg)
+            .to_string();
+        if root.exists() {
+            fail(format!("directory '{name}' already exists"));
+        }
+        fs::create_dir_all(root.join("src")).unwrap_or_else(|error| {
+            fail(format!("cannot create project: {error}"))
+        });
+        let config = format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[deps]\n"
+        );
+        fs::write(root.join("tandem.config"), config)
+            .unwrap_or_else(|error| fail(format!("cannot write tandem.config: {error}")));
+        fs::write(
+            root.join("src").join("main.tdm"),
+            "fn main() -> void {\n    print(\"Hello, world!\");\n}\n\nmain();\n",
+        )
+        .unwrap_or_else(|error| fail(format!("cannot write main.tdm: {error}")));
+        status("Created", name);
+        return;
+    }
+
+    if args[0] == "build" || args[0] == "run" {
+        let is_run = args[0] == "run";
+        let root = Path::new(".");
+        let config_path = root.join("tandem.config");
+        let name = if config_path.exists() {
+            // parse name from tandem.config
+            fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|s| {
+                    for line in s.lines() {
+                        let line = line.trim();
+                        if line.starts_with("name") {
+                            if let Some(val) = line.split('=').nth(1) {
+                                return Some(val.trim().trim_matches('"').to_string());
+                            }
+                        }
+                    }
+                    None
+                })
+                .unwrap_or_else(|| "main".to_string())
+        } else {
+            "main".to_string()
+        };
+        let entry = if root.join("src").join("main.tdm").exists() {
+            root.join("src").join("main.tdm")
+        } else if root.join("src").join("lib.tdm").exists() {
+            root.join("src").join("lib.tdm")
+        } else if root.join("main.tdm").exists() {
+            root.join("main.tdm")
+        } else {
+            fail("no entry point found (expected src/main.tdm or main.tdm)".to_string());
+        };
+        let source = fs::read_to_string(&entry)
+            .unwrap_or_else(|error| fail(format!("cannot read {}: {error}", entry.display())));
+        let parent = entry.parent().unwrap_or(Path::new("."));
+        let lua_source = compiler::compile_with_dir(&source, parent).unwrap_or_else(|diagnostics| {
+            report(&diagnostics, &entry);
+            process::exit(1)
+        });
+        let target_dir = root.join("target").join("debug");
+        fs::create_dir_all(&target_dir).unwrap_or_else(|error| {
+            fail(format!("cannot create target dir: {error}"))
+        });
+        let output_path = target_dir.join(format!("{name}.lua"));
+        if let Err(error) = fs::write(&output_path, &lua_source) {
+            fail(format!("cannot write {}: {error}", output_path.display()));
+        }
+        status("Finished", format!("{} -> {}", entry.display(), output_path.display()));
+        if is_run {
+            runtime::run_file_with_config(&output_path, &[], &config)
+                .unwrap_or_else(|error| fail(error));
+        }
         return;
     }
 

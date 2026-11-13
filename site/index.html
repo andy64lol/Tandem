@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tandem &mdash; a statically typed language that transpiles to Lua 5.4</title>
+    <meta name="description" content="Tandem is a small, statically typed, C-style language that transpiles to Lua 5.4. It compiles .tdm source files to plain Lua and runs them through an embedded runtime.">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="index.html">Tandem</a></h1>
+            <p>A statically typed, C-style language that transpiles to Lua 5.4</p>
+        </div>
+    </div>
+</header>
+
+<nav>
+    <div class="wrap">
+        <a href="index.html">Home</a>
+        <a href="docs/index.html">Docs</a>
+        <a href="#example">Example</a>
+        <a href="#links">Links</a>
+    </div>
+</nav>
+
+<main>
+
+    <section id="about">
+        <h2>What is Tandem?</h2>
+
+        <p>
+            Tandem is a small, statically typed, C-style language that transpiles to
+            Lua 5.4. Source files use the <code>.tdm</code> extension. Declare functions
+            with <code>fn</code>, classes with <code>class</code>, and run the generated
+            Lua through the embedded runtime &mdash; no separate Lua executable required.
+        </p>
+
+        <p>
+            The compiler is written in Rust and checks types, control flow, and
+            inheritance before emitting readable Lua. It supports modules, generics,
+            interfaces, mixins, traits, enums, unions, pattern matching, closures,
+            optional types, and operator overloading.
+        </p>
+
+        <p>
+            <span class="status">Rust compiler</span>
+            <span class="status">Lua 5.4 output</span>
+            <span class="status">MIT licensed</span>
+        </p>
+    </section>
+
+
+    <section id="example">
+        <h2>A first program</h2>
+
+        <pre><code>int playerX = 100;
+
+fn movePlayer(int speed = 10) -> int {
+    return speed + 1;
+}
+
+playerX += movePlayer(20);
+if (playerX > 100) {
+    print("Player moved!");
+}</code></pre>
+
+        <p>
+            Save it as <code>hello.tdm</code>, then run it with
+            <code>cargo run -- hello.tdm</code>.
+        </p>
+    </section>
+
+
+    <section id="docs">
+        <h2>Documentation</h2>
+
+        <p>
+            The reference documentation covers the language, the command line, the Rust
+            API, and current limitations. It lives at
+            <a href="docs/index.html"><code>/docs/</code></a>.
+        </p>
+
+        <ul>
+            <li><a href="docs/index.html">Documentation overview</a> &mdash; start here</li>
+            <li><a href="docs/01-introduction.html">Introduction</a></li>
+            <li><a href="docs/02-getting-started.html">Getting started</a></li>
+            <li><a href="docs/03-types.html">Types</a></li>
+            <li><a href="docs/10-cli.html">CLI reference</a></li>
+            <li><a href="docs/12-classes.html">Classes</a></li>
+            <li><a href="docs/13-limitations.html">Limitations</a></li>
+        </ul>
+    </section>
+
+
+    <section id="links">
+        <h2>Links</h2>
+
+        <ul>
+            <li><a href="https://github.com/andy64lol/Tandem">GitHub repository</a></li>
+            <li><a href="docs/index.html">Documentation</a></li>
+            <li><a href="https://github.com/andy64lol/Tandem/blob/main/LICENSE">License (MIT)</a></li>
+        </ul>
+    </section>
+
+</main>
+
+<footer>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+</body>
+</html>

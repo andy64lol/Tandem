@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>5. Functions - Tandem</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html" class="active">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../index.html">Home</a>
+            <a href="../docs/stdlib/index.html">Standard Library</a>
+            <span>5. Functions</span>
+        </div>
+        <div class="search-bar" data-search-index="../search-index.json" data-site-root="../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="5-functions">5. Functions</h1>
+<h2 id="declarations">Declarations</h2>
+<p>Declare functions with <code>fn</code>, typed parameters, and an optional return annotation:</p>
+<pre><code>fn add(int a, int b) -&gt; int {
+    return a + b;
+}
+
+fn hello() {
+    print(&quot;Hello!&quot;);
+}</code></pre>
+<p>If <code>-&gt; type</code> is omitted, the return type defaults to <code>void</code>. A non-void function's <code>return</code> statement must include a value of the declared type. A void function may use <code>return;</code>. Every control-flow path of a non-void function must return a value. The check understands <code>return</code>, nested blocks, <code>if</code> statements whose branches both return, and <code>while (true)</code> loops. A function that can fall through to its end reports <code>function &#x27;name&#x27; must return a value on every path</code>.</p>
+<h2 id="default-parameter-values">Default parameter values</h2>
+<p>Default parameter values must be trailing; a required parameter after a defaulted one is rejected. Calls may omit trailing defaulted parameters. Generated Lua fills them when the parameter is <code>nil</code>:</p>
+<pre><code>fn greet(str name = &quot;world&quot;) -&gt; void {
+    print(&quot;Hello, &quot; + name);
+}
+
+greet();         // uses &quot;world&quot;
+greet(&quot;Ada&quot;);    // uses &quot;Ada&quot;</code></pre>
+<p>Defaults are type-checked and evaluated left to right, so a default may refer to preceding parameters. At this stage, a default expression should be a literal or another expression valid in the parameter scope.</p>
+<h2 id="calling-and-forward-declarations">Calling and forward declarations</h2>
+<p>Argument counts must fall between the number of required parameters and the total number of parameters, and each argument must have the declared parameter type.</p>
+<p>Function declarations are collected before function bodies are checked, so functions may call declarations that appear later in the source. Function names may not duplicate each other or the built-in names <code>print</code> and <code>printf</code>.</p>
+<p>Functions are not values in 0.1: they cannot be stored in variables, passed as arguments, or returned. See <a href="13-limitations.html">Limitations</a>. Class methods use the same <code>fn</code> syntax but run with an implicit <code>self</code>; see <a href="12-classes.html">Classes</a>.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../search.js" defer></script>
+</body>
+</html>

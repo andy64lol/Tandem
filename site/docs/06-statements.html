@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>6. Statements - Tandem</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html" class="active">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../index.html">Home</a>
+            <a href="../docs/stdlib/index.html">Standard Library</a>
+            <span>6. Statements</span>
+        </div>
+        <div class="search-bar" data-search-index="../search-index.json" data-site-root="../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="6-statements">6. Statements</h1>
+<p>Every statement ends in <code>;</code>. Blocks use braces. Declarations are covered in <a href="04-variables.html">Variables</a>; expressions in <a href="07-expressions.html">Expressions</a>.</p>
+<h2 id="assignment">Assignment</h2>
+<p>Supported assignment operators are <code>=</code>, <code>+=</code>, <code>-=</code>, <code>*=</code>, and <code>/=</code>. Targets can be variables, struct or table fields, tuple element indexes, and dictionary or generic table indexes. Compound assignment requires a numeric target when the target type is known. A variable declared <code>const</code> cannot be reassigned. Dictionary fields can be updated, while lists can only be changed by replacing the whole list. Tuple values and elements can change only if the tuple keeps its original length and each position keeps its original type; a <code>const tuple</code> cannot be changed.</p>
+<pre><code>int score = 0;
+score = 1;
+score += 1;
+score -= 1;
+score *= 2;
+score /= 2;
+
+list int scores = [10, 20];
+scores = [..., 12];
+// scores[1] = 12; // error: replace the whole list instead
+
+tuple position = (0, 10, 11);
+position[1] = 5; // valid: position 1 is still an int
+
+dict player = { name = &quot;Andy&quot;, age = 15, elo = 500 };
+player.age = 16;</code></pre>
+<h2 id="if">if</h2>
+<p>An <code>if</code> statement takes a parenthesized condition and a block, with an optional <code>else</code> block. The condition must have type <code>bool</code>.</p>
+<pre><code>if (count == 0) {
+    count += 1;
+} else {
+    count = 10;
+}</code></pre>
+<h2 id="while">while</h2>
+<p>A <code>while</code> loop also requires a <code>bool</code> condition. A runtime-forever loop such as <code>while (true) { ... }</code> is accepted; a game host normally supplies its own frame loop instead.</p>
+<pre><code>while (count &lt; 5) {
+    count += 1;
+}</code></pre>
+<h2 id="for">for</h2>
+<p>Numeric <code>for</code> loops include their stop value. The forms are <code>for (name, stop)</code>, <code>for (name, start, stop)</code>, and <code>for (name, start, stop, step)</code>. The first form defaults to start <code>0</code> and step <code>1</code>; the second defaults to step <code>1</code>. All bounds and steps must be <code>int</code>. A negative step counts downward. The loop variable is an <code>int</code> scoped to the loop body.</p>
+<pre><code>for (i, 10) {
+    printf(&quot;Hello world! {i}&quot;);
+}</code></pre>
+<p>A zero step is rejected by the Lua runtime.</p>
+<h2 id="return">return</h2>
+<p>A void function may use <code>return;</code>. A non-void function must <code>return</code> a value of its declared return type. The compiler checks each <code>return</code> statement it sees but performs no definite-return analysis, so a function that can finish without returning is not diagnosed.</p>
+<h2 id="expression-statements">Expression statements</h2>
+<p>An expression on its own is a statement, which is how function calls are written:</p>
+<pre><code>movePlayer(20);
+print(&quot;Hello!&quot;);</code></pre>
+<h2 id="standalone-blocks">Standalone blocks</h2>
+<p>Braces can also create a standalone scope:</p>
+<pre><code>{
+    int temporary = 1;
+    print(temporary);
+}</code></pre>
+<p>This standalone block creates a nested scope and becomes a Lua <code>do ... end</code> block. Its declarations are unavailable after the closing <code>}</code>.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../search.js" defer></script>
+</body>
+</html>

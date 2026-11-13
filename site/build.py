@@ -1,0 +1,445 @@
+#!/usr/bin/env python3
+"""Build the static documentation site from ``docs/*.md``.
+
+Renders every page under ``docs/`` into a mirrored HTML tree under
+``site/docs/`` so the website covers all of the documentation. Standard
+library only; no third-party Markdown library is required.
+
+    python3 site/build.py
+"""
+
+from __future__ import annotations
+
+import html
+import json
+import os
+import re
+from collections.abc import Callable
+from pathlib import Path
+
+Link = Callable[[str], str]
+
+ROOT = Path(__file__).resolve().parents[1]
+DOCS = ROOT / "docs"
+SITE = ROOT / "site"
+OUT = SITE / "docs"
+
+# Page groups for the sidebar. Paths are relative to docs/.
+
+# List of all pages to build (Markdown files in docs/)
+GROUPS: list[tuple[str, list[str]]] = [
+    ("Overview", ["README.md"]),
+    ("Getting started", ["01-introduction.md", "02-getting-started.md"]),
+    ("Language", ["03-types.md", "04-variables.md", "05-functions.md", "06-statements.md", "07-expressions.md", "08-comments.md", "12-classes.md"]),
+    ("Tooling", ["09-diagnostics.md", "10-cli.md", "11-rust-api.md"]),
+    ("Reference", ["13-limitations.md"]),
+]
+
+STDLIB_MODULES = [
+    "cli", "colorlib", "compress", "crypto", "csv", "debug", "email", "encoding", "fileIO", "game", "graphics", "html",
+    "image", "ini",
+    "js", "json",
+    "lua", "markdown", "math", "multiprocessing", "network", "numutils", "os", "path", "pdf", "random", "raylib", "re",
+    "regex", "server", "shell", "sound", "sqldb", "sys", "linux-amd64", "linux-arm64", "text", "time", "toml", "tui",
+    "turtle", "typing", "uuid", "watch", "winAPI-amd64", "winAPI-arm64", "winpipe", "winreg", "xml", "yaml",
+]
+
+
+def out_name(md_rel: str) -> str:
+    """docs-relative markdown path -> site/docs-relative HTML path."""
+    if md_rel == "README.md":
+        return "index.html"
+    return md_rel[:-3] + ".html"
+
+
+# ---------------------------------------------------------------- inline ----
+
+def slugify(text: str) -> str:
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9 \-]", "", text)
+    # GitHub replaces each space with a hyphen and keeps doubled hyphens, so
+    # "switch / case / default" becomes "switch--case--default".
+    return text.replace(" ", "-")
+
+
+def build_inline(link: Link) -> Link:
+    def render(text: str) -> str:
+        spans: list[str] = []
+
+        def stash(match: re.Match) -> str:
+            spans.append(match.group(1))
+            return f"\x00{len(spans) - 1}\x00"
+
+        text = re.sub(r"`([^`]+)`", stash, text)
+        text = html.escape(text, quote=False)
+
+        def do_link(match: re.Match) -> str:
+            label, target = match.group(1), match.group(2)
+            # "install.md" reads badly on a web page; show "install".
+            shown = label
+            if re.fullmatch(r"[A-Za-z0-9_./-]+\.md", label):
+                shown = label[:-3]
+            return f'<a href="{html.escape(link(target), quote=True)}">{shown}</a>'
+
+        text = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)",
+                      lambda m: f'<img src="{html.escape(m.group(2), quote=True)}" '
+                                f'alt="{html.escape(m.group(1), quote=True)}">', text)
+        text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", do_link, text)
+        text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
+        text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", text)
+        text = re.sub(r"&lt;(https?://[^&]+?)&gt;",
+                      r'<a href="\1">\1</a>', text)
+
+        def unstash(match: re.Match) -> str:
+            return "<code>" + html.escape(spans[int(match.group(1))]) + "</code>"
+
+        return re.sub(r"\x00(\d+)\x00", unstash, text)
+
+    return render
+
+
+# ----------------------------------------------------------------- blocks ---
+
+def split_row(row: str) -> list[str]:
+    row = row.strip()
+    row = row.removeprefix("|")
+    row = row.removesuffix("|")
+    return [cell.strip().replace("\\|", "|") for cell in re.split(r"(?<!\\)\|", row)]
+
+
+def render_table(lines: list[str], start: int, inline) -> tuple[str, int]:
+    header = split_row(lines[start])
+    index = start + 2
+    body_rows = []
+    while index < len(lines) and lines[index].lstrip().startswith("|"):
+        body_rows.append(split_row(lines[index]))
+        index += 1
+    out = ["<table>", "<tr>" + "".join(f"<th>{inline(c)}</th>" for c in header) + "</tr>"]
+    for row in body_rows:
+        cells = row + [""] * (len(header) - len(row))
+        out.append("<tr>" + "".join(f"<td>{inline(c)}</td>" for c in cells[:len(header)]) + "</tr>")
+    out.append("</table>")
+    return "\n".join(out), index
+
+
+def is_table_start(lines: list[str], index: int) -> bool:
+    if index + 1 >= len(lines):
+        return False
+    if not lines[index].lstrip().startswith("|"):
+        return False
+    sep = lines[index + 1].strip()
+    return bool(re.fullmatch(r"\|?[\s:|-]+\|?", sep)) and "-" in sep
+
+
+LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+\.)\s+(.*)$")
+
+
+def render_list(lines: list[str], start: int, inline) -> tuple[str, int]:
+    ordered = bool(re.match(r"\s*\d+\.", lines[start]))
+    tag = "ol" if ordered else "ul"
+    items: list[str] = []
+    index = start
+
+    while index < len(lines):
+        match = LIST_ITEM.match(lines[index])
+        if not match:
+            break
+        item_ordered = bool(re.match(r"\s*\d+\.", lines[index]))
+        if item_ordered != ordered:
+            break
+        parts = [match.group(3)]
+        index += 1
+        # Indented, non-item lines continue the current item.
+        while index < len(lines):
+            nxt = lines[index]
+            if not nxt.strip():
+                break
+            if LIST_ITEM.match(nxt) or nxt.lstrip().startswith(("|", "#", "```", ">")):
+                break
+            if nxt.startswith((" ", "\t")):
+                parts.append(nxt.strip())
+                index += 1
+            else:
+                break
+        items.append(inline(" ".join(parts)))
+
+    out = [f"<{tag}>"] + [f"<li>{item}</li>" for item in items] + [f"</{tag}>"]
+    return "\n".join(out), index
+
+
+def render_markdown(text: str, link: Link) -> tuple[str, str]:
+    inline = build_inline(link)
+    lines = text.splitlines()
+    out: list[str] = []
+    title = ""
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+
+        if line.startswith("```"):
+            index += 1
+            body = []
+            while index < len(lines) and not lines[index].startswith("```"):
+                body.append(lines[index])
+                index += 1
+            index += 1  # closing fence
+            out.append("<pre><code>" + html.escape("\n".join(body)) + "</code></pre>")
+            continue
+
+        if not line.strip():
+            index += 1
+            continue
+
+        heading = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if heading:
+            level = len(heading.group(1))
+            text_ = heading.group(2).strip()
+            anchor = slugify(text_)
+            if level == 1 and not title:
+                title = re.sub(r"`([^`]*)`", r"\1", text_)
+            out.append(f'<h{level} id="{anchor}">{inline(text_)}</h{level}>')
+            index += 1
+            continue
+
+        if re.fullmatch(r"\s*(-{3,}|\*{3,}|_{3,})\s*", line):
+            out.append("<hr>")
+            index += 1
+            continue
+
+        if is_table_start(lines, index):
+            table, index = render_table(lines, index, inline)
+            out.append(table)
+            continue
+
+        if line.startswith(">"):
+            quote = []
+            while index < len(lines) and lines[index].startswith(">"):
+                quote.append(lines[index].lstrip(">").strip())
+                index += 1
+            out.append("<blockquote>" + inline(" ".join(quote)) + "</blockquote>")
+            continue
+
+        if LIST_ITEM.match(line):
+            block, index = render_list(lines, index, inline)
+            out.append(block)
+            continue
+
+        paragraph = []
+        while index < len(lines):
+            nxt = lines[index]
+            if not nxt.strip():
+                break
+            if (nxt.startswith(("```", ">", "|", "#"))
+                    or LIST_ITEM.match(nxt)
+                    or re.fullmatch(r"\s*(-{3,}|\*{3,}|_{3,})\s*", nxt)):
+                break
+            paragraph.append(nxt.strip())
+            index += 1
+        if not paragraph:
+            # A line that opens a block the loop above did not handle (for
+            # example a table row with no separator row). Emit it and advance so
+            # the loop always makes progress instead of spinning forever.
+            out.append("<p>" + inline(line.strip()) + "</p>")
+            index += 1
+        else:
+            out.append("<p>" + inline(" ".join(paragraph)) + "</p>")
+
+    return "\n".join(out), title
+
+
+# ------------------------------------------------------------------ pages ---
+
+PAGES: list[tuple[str, str]] = []
+for _, names in GROUPS:
+    PAGES.extend((name, out_name(name)) for name in names)
+OUT_BY_MD = {md: out for md, out in PAGES}
+
+
+def make_link(current_out: str, md_rel: str) -> Link:
+    """Return a function rewriting a docs-relative link target for the page."""
+    current_dir = os.path.dirname(current_out)
+
+    def link(target: str) -> str:
+        if target.startswith(("http://", "https://", "mailto:", "#")):
+            return target
+        path, _, anchor = target.partition("#")
+        md_dir = os.path.dirname(md_rel)
+        resolved = os.path.normpath(os.path.join(md_dir, path)) if path else md_dir
+        if not path:
+            return "#" + anchor
+        if resolved.endswith(".md"):
+            if resolved.startswith("../"):
+                repository_path = os.path.normpath(os.path.join("docs", resolved))
+                return (f"https://github.com/andy64lol/Tandem/blob/main/"
+                        f"{repository_path}" + (("#" + anchor) if anchor else ""))
+            html_target = OUT_BY_MD.get(resolved, out_name(resolved))
+            rel = os.path.relpath(html_target, current_dir or ".")
+            return rel + (("#" + anchor) if anchor else "")
+        return target
+
+    return link
+
+
+def render_nav(current_out: str) -> str:
+    current_dir = os.path.dirname(current_out) or "."
+
+    def li(title: str, target_out: str, is_active=False) -> str:
+        active_class = ' class="active"' if is_active else ""
+        rel = os.path.relpath(target_out, current_dir)
+        return f'<li><a href="{rel}"{active_class}>{html.escape(title)}</a></li>'
+
+    parts = []
+    for group, names in GROUPS:
+        parts.append(f'<h3 class="sidebar-group-title">{html.escape(group)}</h3><ul class="sidebar-group">')
+        for name in names:
+            title = re.sub(r"`([^`]*)`", r"\1", name.split("/")[-1][:-3])
+            is_active = OUT_BY_MD[name] == current_out
+            parts.append(li(title, OUT_BY_MD[name], is_active))
+        parts.append("</ul>")
+    return "\n".join(parts)
+
+
+TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>{title} - Tandem</title>
+    <link rel="stylesheet" href="{rel}style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="{rel}index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+{nav}
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="{rel}index.html">Home</a>
+            <a href="{rel}docs/stdlib/index.html">Standard Library</a>
+            <span>{title}</span>
+        </div>
+        <div class="search-bar" data-search-index="{rel}search-index.json" data-site-root="{rel}">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+{content}
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="{rel}search.js" defer></script>
+</body>
+</html>
+"""
+
+
+def write_page(out_rel: str, md_rel: str, content_md: str,
+               fallback_title: str) -> dict[str, object]:
+    link = make_link(out_rel, md_rel)
+    content, title = render_markdown(content_md, link)
+    
+    # Generate breadcrumb text
+    rel = "../" * (out_rel.count("/") + 1)  # back to site/ from site/docs/<...>
+    nav = render_nav(out_rel)
+    
+    page = TEMPLATE.replace('{title}', html.escape(title or fallback_title)).replace('{rel}', rel).replace('{nav}', nav).replace('{content}', content)
+    destination = OUT / out_rel
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(page, encoding="utf-8")
+    searchable_text = html.unescape(re.sub(r"<[^>]+>", " ", content))
+    searchable_text = re.sub(r"\s+", " ", searchable_text).strip()
+    headings = []
+    for anchor, label in re.findall(
+            r'<h[1-6]\s+id="([^"]+)"[^>]*>(.*?)</h[1-6]>', content):
+        heading = html.unescape(re.sub(r"<[^>]+>", "", label))
+        headings.append({"title": heading, "id": anchor})
+    return {
+        "title": title or fallback_title,
+        "path": f"docs/{out_rel}",
+        "text": searchable_text,
+        "headings": headings,
+    }
+
+
+def module_summary(module: str) -> str:
+    path = DOCS / "stdlib" / f"{module}.md"
+    if not path.is_file():
+        return ""
+    paragraph: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if paragraph:
+                break
+            continue
+        if stripped.startswith("#"):
+            continue
+        paragraph.append(stripped)
+    text = re.sub(r"\s+", " ", " ".join(paragraph)).strip()
+    if len(text) > 120:
+        text = text[:117].rsplit(" ", 1)[0] + "…"
+    return text
+
+
+def main() -> int:
+    # Every page: the grouped docs plus the generated stdlib reference pages.
+    count = 0
+    search_records = []
+    for md_rel, out_rel in PAGES:
+        source = DOCS / md_rel
+        if not source.is_file():
+            print(f"missing: docs/{md_rel}")
+            continue
+        search_records.append(
+            write_page(out_rel, md_rel, source.read_text(encoding="utf-8"),
+                       out_rel.split("/")[-1][:-5])
+        )
+        count += 1
+
+
+    (SITE / "search-index.json").write_text(
+        json.dumps(search_records, ensure_ascii=False, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    # Copy the repository's assets/ into site/assets/ so the published site can
+    # link them (the home page uses assets/lynxer.png).
+    assets_src = ROOT / "assets"
+    assets_dst = SITE / "assets"
+    if assets_src.is_dir():
+        assets_dst.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for source in sorted(assets_src.rglob("*")):
+            if source.is_file():
+                target = assets_dst / source.relative_to(assets_src)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read_bytes())
+                copied += 1
+        if copied:
+            print(f"assets: copied {copied} file(s) to {assets_dst.relative_to(ROOT)}/")
+
+    print(f"docs: wrote {count} page(s) to {OUT.relative_to(ROOT)}/")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,428 @@
+/* Lynxer documentation and home page.
+   Flat and simple: no animations, no transitions, no shadows, no rounded cards. */
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: #ffffff;
+    color: #24292f;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+}
+
+.wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+a {
+    color: #0b5cad;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+code {
+    background: #f2f4f6;
+    border: 1px solid #e3e6e9;
+    padding: 0 4px;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 0.9em;
+}
+
+/* --- chrome -------------------------------------------------------------- */
+
+header {
+    background: #f7f8fa;
+    border-bottom: 1px solid #e3e6e9;
+    padding: 16px 0;
+}
+
+.header-inner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.logo {
+    display: block;
+}
+
+.header-text h1 {
+    margin: 0;
+    font-size: 24px;
+    line-height: 1.2;
+}
+
+.header-text h1 a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.header-text p {
+    margin: 2px 0 0;
+    color: #57606a;
+    font-size: 14px;
+}
+
+/* Kept for any page rendered with the older header markup. */
+.header-content {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+nav {
+    background: #ffffff;
+    border-bottom: 1px solid #e3e6e9;
+    padding: 10px 0;
+}
+
+nav a {
+    margin-right: 18px;
+    text-decoration: none;
+    color: #24292f;
+}
+
+nav a:hover {
+    text-decoration: underline;
+}
+
+/* --- home page ----------------------------------------------------------- */
+
+main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px 20px 40px;
+}
+
+section {
+    margin-bottom: 32px;
+}
+
+section + section {
+    border-top: 1px solid #e3e6e9;
+    padding-top: 28px;
+}
+
+h2 {
+    font-size: 20px;
+    margin: 0 0 12px;
+}
+
+h3 {
+    font-size: 16px;
+    margin: 20px 0 8px;
+}
+
+pre {
+    background: #f6f8fa;
+    border: 1px solid #e3e6e9;
+    padding: 12px 14px;
+    overflow-x: auto;
+}
+
+pre code {
+    background: none;
+    border: none;
+    padding: 0;
+}
+
+.status {
+    display: inline-block;
+    border: 1px solid #d0d7de;
+    padding: 2px 8px;
+    font-size: 13px;
+    margin: 2px 4px 2px 0;
+}
+
+/* --- tables and blocks --------------------------------------------------- */
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14px;
+    margin: 14px 0;
+}
+
+th,
+td {
+    border: 1px solid #d0d7de;
+    padding: 7px 10px;
+    text-align: left;
+    vertical-align: top;
+}
+
+th {
+    background: #f6f8fa;
+}
+
+table tr:nth-child(even) {
+    background: #fafbfc;
+}
+
+.table-container {
+    overflow-x: auto;
+    margin: 14px 0;
+}
+
+.code-block {
+    background: #f6f8fa;
+    border: 1px solid #e3e6e9;
+    padding: 12px;
+    margin: 14px 0;
+    overflow-x: auto;
+}
+
+.example-box {
+    background: #fafbfc;
+    border-left: 3px solid #d0d7de;
+    padding: 4px 14px;
+    margin: 14px 0;
+}
+
+.toc {
+    columns: 2;
+    margin: 0;
+    padding-left: 18px;
+}
+
+.toc li {
+    margin-bottom: 3px;
+}
+
+footer {
+    border-top: 1px solid #e3e6e9;
+    text-align: center;
+    color: #57606a;
+    font-size: 13px;
+    padding: 20px;
+}
+
+footer .github {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    margin-right: 6px;
+    color: #57606a;
+    text-decoration: none;
+}
+
+footer .github:hover {
+    color: #24292f;
+}
+
+footer .github svg {
+    display: block;
+}
+
+/* --- documentation layout ------------------------------------------------ */
+
+.layout {
+    display: flex;
+    gap: 28px;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px 20px 48px;
+    align-items: flex-start;
+}
+
+.sidebar {
+    flex: 0 0 240px;
+    border-right: 1px solid #e3e6e9;
+    padding-right: 16px;
+    font-size: 14px;
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+}
+
+.sidebar h3 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #57606a;
+    margin: 0 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #e3e6e9;
+}
+
+.sidebar-group-title {
+    margin: 16px 0 6px;
+    color: #24292f;
+}
+
+.sidebar ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.sidebar li {
+    margin: 3px 0;
+}
+
+.sidebar a {
+    display: block;
+    padding: 3px 0;
+    color: #24292f;
+    text-decoration: none;
+}
+
+.sidebar a:hover {
+    color: #0b5cad;
+    text-decoration: underline;
+}
+
+.sidebar a.active {
+    font-weight: 600;
+    color: #0b5cad;
+}
+
+.breadcrumb {
+    border-bottom: 1px solid #e3e6e9;
+    padding-bottom: 8px;
+    margin-bottom: 18px;
+    font-size: 14px;
+}
+
+.breadcrumb a {
+    color: #0b5cad;
+    text-decoration: none;
+    margin-right: 8px;
+}
+
+.breadcrumb a:hover {
+    text-decoration: underline;
+}
+
+.search-bar {
+    border: 1px solid #d0d7de;
+    padding: 6px 10px;
+    margin-bottom: 18px;
+}
+
+.search-bar input {
+    width: 100%;
+    border: none;
+    outline: none;
+    font-size: 14px;
+    padding: 4px 0;
+    background: none;
+}
+
+.search-results:not(:empty) {
+    margin-top: 8px;
+    border-top: 1px solid #e3e6e9;
+    padding-top: 4px;
+}
+
+.search-result-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.search-result-list li {
+    padding: 6px 0;
+    border-bottom: 1px solid #eef1f3;
+}
+
+.search-result-list a {
+    font-weight: 600;
+}
+
+.search-result-list mark {
+    background: #fff3b0;
+    color: inherit;
+}
+
+.search-result-list p,
+.search-status {
+    margin: 3px 0 0;
+    color: #57606a;
+    font-size: 13px;
+}
+
+.search-status {
+    padding: 3px 0;
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.doc {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.doc h1 {
+    font-size: 26px;
+    margin-top: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e3e6e9;
+}
+
+.doc h2 {
+    font-size: 20px;
+    margin-top: 28px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #e3e6e9;
+}
+
+.doc h3 {
+    font-size: 17px;
+    margin-top: 22px;
+}
+
+.doc table {
+    margin: 10px 0;
+}
+
+.doc pre {
+    font-size: 14px;
+}
+
+.doc li {
+    margin: 6px 0;
+}
+
+.doc blockquote {
+    margin: 12px 0;
+    padding: 4px 14px;
+    background: #fafbfc;
+    border-left: 3px solid #d0d7de;
+    color: #46565f;
+}
+
+@media (max-width: 1000px) {
+    .layout {
+        flex-direction: column;
+    }
+
+    .sidebar {
+        position: static;
+        width: 100%;
+        max-height: none;
+        flex: none;
+        border-right: none;
+        border-bottom: 1px solid #e3e6e9;
+        padding: 0 0 16px;
+        margin-bottom: 16px;
+    }
+}

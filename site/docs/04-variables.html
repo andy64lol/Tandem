@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>4. Variables - Tandem</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html" class="active">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../index.html">Home</a>
+            <a href="../docs/stdlib/index.html">Standard Library</a>
+            <span>4. Variables</span>
+        </div>
+        <div class="search-bar" data-search-index="../search-index.json" data-site-root="../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="4-variables">4. Variables</h1>
+<h2 id="declarations">Declarations</h2>
+<p>Declarations use <code>(local) (const) type name = value;</code>, where the parentheses mark optional modifiers. For example:</p>
+<pre><code>int score = 0;
+float gravity = 9.8;
+bool alive = true;
+str playerName = &quot;Ada&quot;;
+const int maxLives = 3;
+local int scoreLimit = 100;
+(local) (const) str edition = &quot;standard&quot;;
+list int scores = [10, 20, 30];
+tuple position = (0, 10, 11);</code></pre>
+<p>Every declaration needs an initializer, and the initializer must have the declared type. Reassignments are checked against the variable's current type. To deliberately change that type, annotate the new value with <code>as type</code>:</p>
+<pre><code>int name = 0;
+name = &quot;Hello!&quot; as str;
+name = &quot;Tandem&quot;; // now a str
+// name = 1;      // error: name is now a str</code></pre>
+<p>Class instances use the special <code>class</code> declaration form: <code>class Player = new player;</code>, optionally with <code>local</code> or <code>const</code>. The class from the <code>new</code> expression supplies the static type. See <a href="12-classes.html">Classes</a>.</p>
+<p>The one exception to the type rule is a module binding: <code>module greetings = require(&quot;greetings.tdm&quot;);</code> and <code>local greetings = require(&quot;greetings.tdm&quot;);</code> infer the module type from <code>require</code>. See <a href="02-getting-started.html#split-a-program-across-files">Getting started</a> for module imports.</p>
+<h3 id="automatic-type-inference">Automatic type inference</h3>
+<p>The <code>auto</code> type infers a variable's type from its initializer and then locks it, so later assignments behave as if the inferred type had been written explicitly:</p>
+<pre><code>auto lives = 3;        // inferred as int
+lives += 1;
+// lives = &quot;three&quot; as str; // error: cannot change the type of &#x27;auto&#x27; variable &#x27;lives&#x27;
+
+auto greeting = &quot;hi &quot; .. &quot;there&quot;; // inferred as str</code></pre>
+<p>An <code>auto</code> variable cannot be redefined, and the initializer must have a static type. The type cannot be inferred from a dynamic value such as a member of a standard library package, and using <code>auto</code> in a parameter, field, or return type is an error; it is only valid in a variable declaration with an initializer.</p>
+<p><code>as</code> is a type assertion, not a conversion: a statically known value must already have the asserted type. For a dynamic value read from a generic <code>table</code> or <code>dict</code>, from a tuple with an unknown index, or from a dynamic module, <code>as type</code> explicitly asserts its type. The generated Lua does not validate or convert the value at runtime. If different control-flow paths leave a variable with different types, the compiler treats its type as dynamic until an explicit <code>as type</code> assertion is used. A global variable can be retyped at top level; inside a function, use <code>as</code> to read a global whose type changes in the program, and retyping the global itself is rejected.</p>
+<p>A variable cannot be declared with type <code>void</code>.</p>
+<h3 id="collection-redefinition">Collection redefinition</h3>
+<p><code>list</code>, <code>dict</code>, and <code>tuple</code> declarations may repeat an existing collection name in the same scope to replace its value. Lists keep their declared element type. Tuples keep the length and type at each position inferred by the first declaration. Dictionaries keep the <code>dict</code> type and may contain named fields with different value types. These redefinitions are allowed only for mutable variables. A mutable variable cannot be made <code>const</code> by a later declaration.</p>
+<pre><code>tuple position = (0, 10, 11);
+tuple position = (10, 20, 30); // valid
+// tuple position = (&quot;Hello&quot;, 10); // error: wrong length and first element type
+
+list int scores = [10, 20, 30];
+scores = [..., 12, ...];</code></pre>
+<h2 id="the-local-and-const-modifiers">The local and const modifiers</h2>
+<p>The <code>local</code> and <code>const</code> modifiers are optional, shown here as <code>(local)</code> and <code>(const)</code>. They may appear in either order, and may be written with or without the parentheses. Thus <code>local const int limit = 10;</code>, <code>(local) (const) int limit = 10;</code>, and <code>const (local) int limit = 10;</code> are all accepted forms. Writing the same modifier twice is an error.</p>
+<h3 id="local">local</h3>
+<p>Inside functions and blocks, declarations become Lua locals whether or not <code>local</code> is written. At top level, declarations become Lua globals unless marked <code>local</code>; top-level locals are visible to functions in the same Tandem file. In generated Lua, top-level <code>local</code> names are hoisted to the top of the chunk.</p>
+<h3 id="const">const</h3>
+<p>A <code>const</code> binding can be read like any other variable, but Tandem rejects assignments to it, including compound assignments:</p>
+<pre><code>const int maxLives = 3;
+maxLives = 4;    // error: cannot assign to constant &#x27;maxLives&#x27;
+maxLives += 1;   // error</code></pre>
+<p>Its initializer must match its declared type. Constness is checked by the Tandem compiler and is erased in generated Lua. A <code>const tuple</code> also locks its elements. Declaring an already mutable collection with <code>const</code> is an error.</p>
+<h2 id="scope">Scope</h2>
+<p>A declaration is visible from its statement to the end of the enclosing block. Duplicate names in the same scope are rejected except for the collection redefinitions described above. An inner block may shadow a name from an outer scope. Braces create scopes: function bodies, <code>if</code> and <code>while</code> bodies, <code>for</code> bodies, and standalone blocks (see <a href="06-statements.html">Statements</a>).</p>
+<pre><code>{
+    int temporary = 1;
+    print(temporary);
+}
+// &#x27;temporary&#x27; is unknown here</code></pre>
+<p>Function parameters occupy the function's scope and may be assigned like any other mutable variable.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../search.js" defer></script>
+</body>
+</html>

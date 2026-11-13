@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>3. Types - Tandem</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="03-types.html" class="active">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../index.html">Home</a>
+            <a href="../docs/stdlib/index.html">Standard Library</a>
+            <span>3. Types</span>
+        </div>
+        <div class="search-bar" data-search-index="../search-index.json" data-site-root="../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="3-types">3. Types</h1>
+<p>Primitive types and collection types are checked at compile time and erased in generated Lua. Struct types retain their field names at runtime as ordinary Lua tables.</p>
+<table>
+<tr><th>Type</th><th>Values</th><th>Lua representation</th></tr>
+<tr><td><code>int</code></td><td>Integer literals such as <code>42</code></td><td><code>number</code></td></tr>
+<tr><td><code>float</code></td><td>Decimal literals such as <code>3.5</code></td><td><code>number</code></td></tr>
+<tr><td><code>bool</code></td><td><code>true</code> or <code>false</code></td><td><code>boolean</code></td></tr>
+<tr><td><code>str</code></td><td>Double-quoted strings</td><td><code>string</code></td></tr>
+<tr><td><code>table</code></td><td>A Lua table with dynamically typed keys and values</td><td><code>table</code></td></tr>
+<tr><td><code>table Key Value</code></td><td>A typed table whose keys have type <code>Key</code> (<code>str</code> or <code>int</code>) and values have type <code>Value</code></td><td><code>table</code></td></tr>
+<tr><td><code>dict</code></td><td>Named, dynamically typed values</td><td><code>table</code></td></tr>
+<tr><td><code>list Type</code></td><td>Ordered values that all have the given type</td><td><code>table</code></td></tr>
+<tr><td><code>tuple</code></td><td>Ordered values with a fixed length and a fixed type at each position</td><td><code>table</code></td></tr>
+<tr><td><code>void</code></td><td>No return value; function return type only</td><td><code>nil</code></td></tr>
+<tr><td>class name</td><td>An instance created with <code>new</code></td><td>table with a metatable</td></tr>
+</table>
+<p>There are no implicit conversions. <code>int</code> and <code>float</code> are distinct static types, even though both use Lua numbers at runtime.</p>
+<p><code>auto</code> is not a type of its own: it infers a variable's type from its initializer and locks it. It is valid only in a variable declaration with an initializer. See <a href="04-variables.html#automatic-type-inference">Variables</a>.</p>
+<p>A declaration can use the <code>module</code> type to bind a required file: <code>module greetings = require(&quot;greetings.tdm&quot;);</code>. The compiler infers the module's exported members from that file. A bare <code>module</code> type outside such a declaration is rejected.</p>
+<p>Lists use a type after <code>list</code>, for example <code>list int scores = [10, 20, 30];</code>. List elements must match that type. Lists use square brackets and Lua's one-based indexes. Do not use <code>int[]</code>; curly braces are for tables and dictionaries, and parentheses are for tuples.</p>
+<p>A plain <code>table</code> is a generic Lua table whose keys and values are dynamic. A generic table initialized with a table literal keeps the static types of its named fields and positional values for reads through that variable: <code>table t = { count = 1 }; int n = t.count;</code> is checked. Assigning a known field or index validates its value type. Reassigning the whole table makes subsequent reads dynamic again. <code>table Key Value</code> is a statically typed table: <code>Key</code> must be <code>str</code> or <code>int</code>, and every read or write is checked against <code>Value</code>. With <code>str</code> keys, literals use named fields and values can be read with both <code>t.name</code> and <code>t[&quot;name&quot;]</code>. With <code>int</code> keys, literals are positional and receive keys 1, 2, 3, and so on. Typed tables still compile to ordinary Lua tables.</p>
+<pre><code>table str int ages = { alice = 21, bob = 32 };
+int bob = ages.bob;
+ages[&quot;carol&quot;] = 17;
+ages.dave = 4;
+
+table int str names = { &quot;zero&quot;, &quot;one&quot;, &quot;two&quot; };
+str one = names[1];</code></pre>
+<p>Use <code>dict</code> for named keys, <code>list Type</code> for resizable ordered values of one type, and <code>tuple</code> for an ordered group whose length and positional types are inferred from its first value. These collections compile to Lua tables. Values read from a generic <code>table</code> keep the types of its literal initializer when known; values read from a <code>dict</code>, from a generic <code>table</code> without a literal shape, and values exported by dynamic modules have no statically known type. Dynamic values require an explicit <code>as type</code> assertion to assign them to a statically typed variable, field, or parameter. List reads retain the list's element type, and tuple reads at a constant index retain that position's type. An assertion does not convert or validate the value at runtime.</p>
+<p>Structs define named fields and their types:</p>
+<pre><code>struct Point {
+    float x;
+    float y;
+}
+
+Point origin = { x = 0.0, y = 0.0 };
+origin.x = 2.0;</code></pre>
+<p>Struct initializers must provide each field exactly once with a matching value type. Struct declarations are top-level. Their values compile to Lua tables.</p>
+<p>A class name is also a type. Class instances are created with <code>new</code> and carry field and method types; class values cannot be initialized with table literals. See <a href="12-classes.html">Classes</a>.</p>
+<pre><code>table options = { debug = true, retries = 3 };
+print(options[&quot;debug&quot;]);
+
+dict player = { name = &quot;Maria&quot;, age = 35, points = 500 };
+player.age = 16;
+list int scores = [10, 20, 30];
+scores = [..., 12, ...];
+tuple position = (0, 10, 11);
+tuple position = (4, 10, 11); // same length and positional types
+position[1] = 5;
+int x = position[1];</code></pre>
+<p>Lists and tuples use Lua's one-based indexing. A list can only be changed by assigning a replacement list; list index assignment is rejected. In a list replacement, each <code>...</code> keeps the old value at that position, and <code>...</code> is only valid in lists. Tuples can be reassigned or updated by index only while keeping the original length and type at every position. <code>as type</code> inside a tuple initializer is allowed only for <code>const tuple</code>, which locks the whole tuple. A variable cannot be made const after its first declaration. Lists and dictionaries can be redefined only while their variable is mutable; a list redefinition keeps its element type.</p>
+<h2 id="literals">Literals</h2>
+<ul>
+<li>Integer literals: <code>42</code>, <code>0</code>, <code>100</code>.</li>
+<li>Float literals: <code>3.5</code>, <code>9.8</code>. Decimal literals need digits on both sides of the decimal point, so write <code>3.5</code>, not <code>3.</code> or <code>.5</code>.</li>
+<li>String literals: double-quoted, with the escapes <code>\n</code>, <code>\r</code>, <code>\t</code>, <code>\&quot;</code>, and <code>\\</code>.</li>
+<li>Boolean literals: <code>true</code> and <code>false</code>.</li>
+</ul>
+<h2 id="void">void</h2>
+<p><code>void</code> is the return type of functions that return nothing. A variable cannot have type <code>void</code>; the compiler rejects <code>void x = ...;</code>. If a function declaration omits <code>-&gt; type</code>, the return type defaults to <code>void</code>.</p>
+<h2 id="type-checking">Type checking</h2>
+<p>Every expression and statement is checked: initializers must match declared types, operands must have compatible types, arguments must match parameter types, and return values must match the declared return type. Type annotations and <code>const</code>/<code>local</code> markers exist only in the source; the generated Lua contains plain values and names.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../search.js" defer></script>
+</body>
+</html>

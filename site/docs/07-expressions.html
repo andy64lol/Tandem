@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>7. Expressions - Tandem</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html" class="active">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="09-diagnostics.html">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../index.html">Home</a>
+            <a href="../docs/stdlib/index.html">Standard Library</a>
+            <span>7. Expressions</span>
+        </div>
+        <div class="search-bar" data-search-index="../search-index.json" data-site-root="../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="7-expressions">7. Expressions</h1>
+<h2 id="forms">Forms</h2>
+<p>Supported expressions include literals, variables, function calls, table and list literals, field and index access, type assertions with <code>as type</code>, parentheses, unary <code>!</code> and <code>-</code>, arithmetic (<code>+ - * / %</code>), string concatenation (<code>+</code>, <code>,</code>, and <code>..</code>), comparisons (<code>== != &lt; &gt; &lt;= &gt;=</code>), and boolean logic (<code>&amp;&amp; ||</code>). A tuple literal is written in parentheses in a <code>tuple</code> declaration.</p>
+<p>Table literals use <code>{ ... }</code>; generic tables may use named or integer keys. A <code>dict</code> uses named fields inside <code>{ ... }</code>. A <code>table Key Value</code> declaration checks the literal against its key and value types: <code>str</code> keys use named fields, while <code>int</code> keys use positional values. List literals use <code>[ ... ]</code> and must match their declared element type. Lists are replaced as a whole, and <code>...</code> in a replacement preserves the old list value at the same position; <code>...</code> cannot appear elsewhere. Tuple values use <code>( ... )</code> in a <code>tuple</code> declaration. Their length and positional types are fixed by the first value, though values can be updated without changing those types. <code>as type</code> inside a tuple initializer is allowed only for <code>const tuple</code>, which locks the whole tuple. Dictionaries use string keys, lists use integer indexes for reads, and generic tables accept integer or string keys. Values read from a generic table keep the types of its literal initializer when known; values read from dictionaries, from generic tables without a literal shape, and from dynamic modules are dynamic. List elements and tuple positions at constant indexes retain their types. A dynamic value needs an explicit <code>as type</code> assertion before it can be assigned to a typed variable, field, or parameter. <code>as</code> asserts the type but does not convert or validate the value at runtime.</p>
+<pre><code>list int values = [4, 8, 15];
+int first = values[1];
+table config = { retries = 3 };
+print(config.retries);
+
+dict player = { name = &quot;Andy&quot;, age = 15, elo = 500 };
+tuple position = (0, 10, 11);
+tuple position = (10, 20, 30);
+int x = position[1];</code></pre>
+<h2 id="operator-precedence">Operator precedence</h2>
+<p>From loosest to tightest binding:</p>
+<table>
+<tr><th>Operators</th><th>Associativity</th></tr>
+<tr><td><code>,</code></td><td>left</td></tr>
+<tr><td><code>||</code></td><td>left</td></tr>
+<tr><td><code>&amp;&amp;</code></td><td>left</td></tr>
+<tr><td><code>==</code> <code>!=</code></td><td>left</td></tr>
+<tr><td><code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code></td><td>left</td></tr>
+<tr><td><code>+</code> <code>-</code> <code>..</code></td><td>left</td></tr>
+<tr><td><code>*</code> <code>/</code> <code>%</code></td><td>left</td></tr>
+<tr><td>unary <code>!</code> <code>-</code></td><td>prefix</td></tr>
+</table>
+<p>Parentheses group subexpressions as usual. The comma operator binds loosest of all, which is why a comma-concatenation passed as a function argument needs parentheses.</p>
+<h2 id="arithmetic">Arithmetic</h2>
+<p>Arithmetic operands must have the same numeric type; there is no mixing of <code>int</code> and <code>float</code>, and no implicit conversions. Unary <code>-</code> negates an <code>int</code> or a <code>float</code>. <code>%</code> is Lua's remainder operator on the chosen numeric type.</p>
+<h2 id="strings">Strings</h2>
+<p><code>+</code>, <code>,</code>, and <code>..</code> join two strings as well as adding matching numeric values; <code>..</code> is Lua's concatenation operator. For example:</p>
+<pre><code>str greeting = &quot;Hello&quot;, &quot; world&quot;;
+str name = &quot;Type&quot; + &quot;Lua&quot;;
+str file = &quot;notes&quot; .. &quot;.txt&quot;;</code></pre>
+<p>All three concatenate. Since commas also separate function arguments, wrap a comma-concatenation expression in parentheses when passing it as an argument: <code>print((&quot;Hello&quot;, &quot; world&quot;));</code>.</p>
+<h2 id="comparisons-and-logic">Comparisons and logic</h2>
+<p>Equality requires matching non-void types. Ordered comparisons (<code>&lt; &gt; &lt;= &gt;=</code>) support matching <code>int</code>, <code>float</code>, or <code>str</code> operands and produce a <code>bool</code>. Boolean operators <code>&amp;&amp;</code> and <code>||</code> require boolean operands, as does unary <code>!</code>.</p>
+<h2 id="built-in-functions">Built-in functions</h2>
+<h3 id="print">print</h3>
+<p>The built-in <code>print(...)</code> accepts any number of arguments of any type and maps to Lua's <code>print</code>.</p>
+<h3 id="printf">printf</h3>
+<p><code>printf</code> accepts one string literal and prints it with <code>{variable}</code> interpolation. Placeholders must name variables in scope. Double braces produce literal braces, as in <code>printf(&quot;{{name}} is {playerName}&quot;)</code>. An unmatched <code>}</code>, or a placeholder that is not a variable name, is a compile error.</p>
+<pre><code>int i = 1;
+printf(&quot;Hello world! {i}&quot;);
+// prints: Hello world! 1</code></pre>
+<p>Generated Lua builds the output by concatenating the text with each variable converted by <code>tostring</code>.</p>
+<h2 id="standard-library-imports">Standard library imports</h2>
+<p>Lua standard library packages are not in scope by default. Each package must be imported at the top level before it can be used:</p>
+<pre><code>import string, math;
+
+str upper = string.upper(&quot;lua&quot;);
+float root = math.sqrt(16.0);
+int length = string.len(upper);</code></pre>
+<p><code>import</code> may list several packages separated by commas and is only allowed at the top level. Supported packages are <code>string</code>, <code>table</code>, <code>math</code>, <code>io</code>, <code>os</code>, <code>coroutine</code>, <code>utf8</code>, <code>debug</code>, and <code>package</code>. Importing an unknown package is an error: <code>Unrecognised package &#x27;nope&#x27;</code>.</p>
+<p>Common package members have static signatures. For example, <code>string.upper</code> and <code>string.format</code> return <code>str</code>, <code>string.len</code> returns <code>int</code>, and <code>math.sqrt</code> returns <code>float</code>. Arguments and return values are checked like any other function call. Members without a signature remain dynamic and require an explicit <code>as type</code> assertion. An unknown member is an error such as <code>package &#x27;string&#x27; has no member &#x27;nope&#x27;</code>. A package name used without its import reports <code>Unrecognised package &#x27;string&#x27;: import it with &#x27;import string;&#x27;</code>.</p>
+<p>Lua's base functions (<code>assert</code>, <code>pairs</code>, <code>ipairs</code>, <code>pcall</code>, <code>tonumber</code>, <code>tostring</code>, <code>type</code>, and others) and base values (<code>_G</code>, <code>_VERSION</code>) follow the same rule: <code>import base;</code> brings them into scope. Frequently used base functions have static signatures too, such as <code>tostring(any) -&gt; str</code>, <code>type(any) -&gt; str</code>, <code>rawlen(any) -&gt; int</code>, and <code>_VERSION -&gt; str</code>. The Tandem built-ins <code>print</code> and <code>printf</code> described above are always available.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../search.js" defer></script>
+</body>
+</html>

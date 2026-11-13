@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="theme-color" content="#4a90e2">
+    <title>9. Diagnostics - Tandem</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header>
+    <div class="wrap header-inner">
+        <div class="header-text">
+            <h1><a href="../index.html">Tandem</a></h1>
+            <p>Documentation</p>
+        </div>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+<h3 class="sidebar-group-title">Overview</h3><ul class="sidebar-group">
+<li><a href="index.html">README</a></li>
+</ul>
+<h3 class="sidebar-group-title">Getting started</h3><ul class="sidebar-group">
+<li><a href="01-introduction.html">01-introduction</a></li>
+<li><a href="02-getting-started.html">02-getting-started</a></li>
+</ul>
+<h3 class="sidebar-group-title">Language</h3><ul class="sidebar-group">
+<li><a href="03-types.html">03-types</a></li>
+<li><a href="04-variables.html">04-variables</a></li>
+<li><a href="05-functions.html">05-functions</a></li>
+<li><a href="06-statements.html">06-statements</a></li>
+<li><a href="07-expressions.html">07-expressions</a></li>
+<li><a href="08-comments.html">08-comments</a></li>
+<li><a href="12-classes.html">12-classes</a></li>
+</ul>
+<h3 class="sidebar-group-title">Tooling</h3><ul class="sidebar-group">
+<li><a href="09-diagnostics.html" class="active">09-diagnostics</a></li>
+<li><a href="10-cli.html">10-cli</a></li>
+<li><a href="11-rust-api.html">11-rust-api</a></li>
+</ul>
+<h3 class="sidebar-group-title">Reference</h3><ul class="sidebar-group">
+<li><a href="13-limitations.html">13-limitations</a></li>
+</ul>
+    </nav>
+    <main class="doc">
+        <div class="breadcrumb">
+            <a href="../index.html">Home</a>
+            <a href="../docs/stdlib/index.html">Standard Library</a>
+            <span>9. Diagnostics</span>
+        </div>
+        <div class="search-bar" data-search-index="../search-index.json" data-site-root="../">
+            <label class="visually-hidden" for="docs-search">Search documentation</label>
+            <input id="docs-search" type="search" placeholder="Search documentation..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" aria-live="polite"></div>
+        </div>
+<h1 id="9-diagnostics">9. Diagnostics</h1>
+<p>Tandem reports two kinds of diagnostic: <strong>errors</strong> and <strong>warnings</strong>. Both stop compilation. If the compiler produces even one diagnostic, no Lua is generated, written, or run.</p>
+<h2 id="errors">Errors</h2>
+<p>An error is a violation of the language: a syntax error, a type mismatch, an unknown name, an invalid assignment, and so on. Every statement must end in <code>;</code>, so omitting one is an error:</p>
+<pre><code>int x = 1
+// error: expected &#x27;;&#x27;</code></pre>
+<p>Syntax errors are recoverable. After a malformed statement or declaration the parser skips forward to the next statement boundary, so a single compile can report several syntax errors with their locations. If parsing succeeds, each module is type-checked and the first error in each module is reported.</p>
+<p>Every parser, lexer, and type error includes a line and column. Locations use one-based lines and columns.</p>
+<h2 id="warnings">Warnings</h2>
+<p>A warning flags code that is technically legal but suspicious. Tandem is deliberately strict: a single warning is fatal, so warnings behave like errors and block code generation. The current warning checks are:</p>
+<ul>
+<li>a variable shadows a declaration in an outer scope;</li>
+<li>a local variable or parameter is never used;</li>
+<li>a statement is unreachable because it follows a <code>return</code>.</li>
+</ul>
+<pre><code>fn f() -&gt; int {
+    int unused = 1;   // warning: unused variable &#x27;unused&#x27;
+    return unused;
+}</code></pre>
+<p>The compiler collects every warning in a program and reports them together. <code>printf(&quot;{name}&quot;)</code> placeholders count as uses, so a variable used only inside a <code>printf</code> format is not reported.</p>
+<h2 id="reporting">Reporting</h2>
+<p>Each diagnostic is printed with its severity, its message, and the source path with the location:</p>
+<pre><code>error: expected &#x27;;&#x27;, found &#x27;int&#x27; at line 2, column 1
+ --&gt; examples/hello.tdm:2:1
+
+warning: unused variable &#x27;unused&#x27;
+ --&gt; examples/hello.tdm</code></pre>
+<p>Messages include the kind of token that was found where the compiler expected something else, for example <code>expected &#x27;;&#x27;, found &#x27;}&#x27;</code> or <code>expected expression, found &#x27;;&#x27;</code>. Status messages and diagnostics are colored when the output stream is a terminal.</p>
+<p>Type errors use the same form. For example, a missing return reports the function's declaration location:</p>
+<pre><code>error: function &#x27;f&#x27; must return a value on every path at line 1, column 1
+ --&gt; examples/missing-return.tdm:1:1</code></pre>
+<p>Because warnings block code generation, <code>tandem</code> writes no <code>.lua</code> file and both <code>tandem</code> and <code>tandem --check</code> exit with a nonzero status whenever a diagnostic is present. The Rust API returns diagnostics as a <code>Vec&lt;Diagnostic&gt;</code>; see <a href="11-rust-api.html">Rust API</a>.</p>
+<h2 id="source-maps">Source maps</h2>
+<p>Generated Lua keeps a link back to the Tandem source. Each generated statement and function signature ends with a Lua comment naming the original line and column:</p>
+<pre><code>x = 1 -- tdm:1:1
+if (x &gt; 0) then -- tdm:2:1
+    print(&quot;yes&quot;) -- tdm:3:5
+end</code></pre>
+<p>The marker is <code>-- tdm:&lt;line&gt;:&lt;column&gt;</code>. Editors and debugging tools can parse it to map a generated Lua line back to the <code>.tdm</code> file. Nested statements carry their own markers, so the innermost marker on a line is the most precise location.</p>
+    </main>
+</div>
+
+<footer>
+    <a class="github" href="https://github.com/andy64lol/Tandem" aria-label="Lynxer on GitHub" title="Lynxer on GitHub"><svg role="img" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg></a>
+    <span>Tandem &middot; MIT License</span>
+</footer>
+
+<script src="../search.js" defer></script>
+</body>
+</html>
